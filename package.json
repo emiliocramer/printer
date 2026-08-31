@@ -1,0 +1,19 @@
+{
+  "name": "printer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "print": "node src/cli.js print",
+    "smoke": "node src/cli.js print"
+  },
+  "bin": {
+    "printer": "src/cli.js"
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.6.0",
+    "jsdom": "^29.1.1",
+    "playwright": "^1.55.0"
+  }
+}

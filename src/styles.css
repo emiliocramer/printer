@@ -1,0 +1,54 @@
+@page {
+  size: Letter portrait;
+  margin: 0.72in 0.78in 0.78in;
+  @bottom-left { content: "Source: " string(source-url); font: 8pt Arial, sans-serif; color: #66706f; }
+  @bottom-right { content: "Page " counter(page) " of " counter(pages); font: 8pt Arial, sans-serif; color: #66706f; }
+}
+
+:root {
+  --ink: #202a2b;
+  --muted: #66706f;
+  --paper: #fffdf8;
+  --accent: #1f6f68;
+  --accent-soft: #dcece6;
+  --rule: #c9d6d1;
+}
+
+* { box-sizing: border-box; }
+html { background: var(--paper); color: var(--ink); -webkit-font-smoothing: antialiased; }
+body { margin: 0; background: var(--paper); font-family: Georgia, "Times New Roman", serif; line-height: 1.58; }
+.provenance-page { min-height: 9.35in; display: flex; flex-direction: column; justify-content: center; break-after: page; page-break-after: always; }
+.eyebrow { color: var(--accent); font: 700 9pt Arial, sans-serif; letter-spacing: .14em; text-transform: uppercase; }
+.provenance-page h1 { max-width: 6.2in; margin: .2in 0 .55in; font-size: 32pt; line-height: 1.08; text-wrap: balance; }
+.provenance-details { margin: 0; border-top: 2px solid var(--accent); }
+.metadata-row { display: grid; grid-template-columns: 1.45in 1fr; gap: .2in; padding: .12in 0; border-bottom: 1px solid var(--rule); }
+.metadata-row dt { color: var(--muted); font: 700 8pt Arial, sans-serif; letter-spacing: .07em; text-transform: uppercase; }
+.metadata-row dd { margin: 0; font: 10pt Arial, sans-serif; overflow-wrap: anywhere; }
+.source-url { string-set: source-url content(); color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.provenance-note { margin-top: .55in; color: var(--muted); font: 9pt Arial, sans-serif; }
+.article-content { font-size: 11.5pt; text-wrap: pretty; }
+.article-content > h1, .article-content > h2, .article-content > h3, .article-content > h4, .article-content > h5, .article-content > h6 { break-after: avoid; page-break-after: avoid; break-inside: avoid; page-break-inside: avoid; line-height: 1.18; text-wrap: balance; }
+.article-content > h1 { font-size: 26pt; }
+.article-content > h2 { margin-top: .35in; font-size: 19pt; }
+.article-content > h3 { font-size: 15pt; }
+p, li, blockquote { orphans: 3; widows: 3; }
+a { color: inherit; }
+.article-content a[href] { text-decoration: underline; text-underline-offset: 2px; text-decoration-thickness: .06em; }
+figure { margin: .28in 0; break-inside: avoid; page-break-inside: avoid; }
+figure img, figure svg, figure video { display: block; max-width: 100%; height: auto; }
+figure img { outline: 1px solid rgba(32, 42, 43, .16); }
+figcaption { margin-top: .08in; color: var(--muted); font: italic 9pt Arial, sans-serif; line-height: 1.35; }
+.wide-figure { break-inside: auto; page-break-inside: auto; }
+.figure-panels { display: grid; gap: .18in; }
+.figure-panel { position: relative; min-height: 2.25in; break-inside: avoid; page-break-inside: avoid; overflow: hidden; border-top: 2px solid var(--accent-soft); padding-top: .1in; }
+.figure-panel[data-panel-role="source"] > * { width: max-content; min-width: 7.2in; max-width: none; transform-origin: top left; }
+.figure-panel[data-panel-role="continuation"] { display: grid; place-items: center; border-bottom: 1px dashed var(--rule); }
+.continuation-label { color: var(--accent); font: 700 8pt Arial, sans-serif; letter-spacing: .06em; text-transform: uppercase; }
+table { width: 100%; border-collapse: collapse; font-size: .9em; break-inside: avoid; }
+th, td { padding: .06in .08in; border-bottom: 1px solid var(--rule); text-align: left; }
+th { font: 700 8pt Arial, sans-serif; text-transform: uppercase; letter-spacing: .04em; }
+table caption { margin-bottom: .08in; color: var(--muted); text-align: left; font: italic 9pt Arial, sans-serif; }
+pre, code { font-family: "SFMono-Regular", Consolas, monospace; font-size: .84em; }
+pre { overflow-wrap: anywhere; white-space: pre-wrap; padding: .14in; background: #eef2ef; border-left: 3px solid var(--accent); break-inside: avoid; }
+blockquote { margin: .22in 0; padding: .05in .2in; border-left: 3px solid var(--accent); color: #3a4847; break-inside: avoid; }
+@media screen { body { max-width: 8.5in; margin: 0 auto; padding: .45in; } }
