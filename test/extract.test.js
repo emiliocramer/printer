@@ -405,6 +405,15 @@ test('preserves meaningful graphics but omits empty chart placeholders', () => {
   assert.equal(document.querySelector('.real-chart figcaption')?.textContent, 'Observed trend');
 });
 
+test('omits small standalone interface icons from recovered visuals', () => {
+  const html = `<main><article><h1>Icon-free report</h1><p>${'Readable report prose. '.repeat(30)}</p>
+    <svg width="20" height="20" viewBox="0 0 24 24" class="lucide lucide-link"><path d="M1 1L23 23"></path></svg>
+  </article></main>`;
+  const { content } = extractArticle(html, SOURCE_URL);
+  const document = new JSDOM(`<body>${content}</body>`).window.document;
+  assert.equal(document.querySelector('svg.lucide'), null);
+});
+
 
 test('recovers prose sections that Readability drops around interactive components', () => {
   const repeated = 'Detailed analysis establishes the evidence and context for the incident. '.repeat(12);

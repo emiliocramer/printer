@@ -19,6 +19,9 @@ npm link
 printer print https://example.com/article
 ```
 
+Use `printer print`, not bare `print`: `print` is a built-in command in zsh and
+only echoes its arguments instead of running this CLI.
+
 The PDF is written to:
 
 ```text

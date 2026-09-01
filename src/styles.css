@@ -20,7 +20,7 @@
 html { background: var(--paper); color: var(--ink); -webkit-font-smoothing: antialiased; }
 body { margin: 0; background: var(--paper); font-family: var(--font-body); line-height: 1.58; }
 .provenance-page, .article-page { background: var(--paper); }
-.provenance-page { min-height: 9.35in; padding-top: 3.35in; break-after: page; page-break-after: always; }
+.provenance-page { min-height: 9in; padding-top: 3.35in; break-after: page; page-break-after: always; }
 .academic-title-page { text-align: center; }
 .cover-title-block { width: 100%; }
 .provenance-page h1 { margin: 0 0 .2in; font-size: 2em; font-weight: bold; line-height: normal; }

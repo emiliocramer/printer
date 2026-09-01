@@ -117,6 +117,11 @@ function mergeVisuals(contentRoot, sourceDocument, sourceUrl) {
   const seenAlt = new Set([...contentRoot.querySelectorAll('img[alt]')].map((img) => img.alt.trim().toLowerCase()).filter(Boolean));
   const seenBase = new Set([...contentRoot.querySelectorAll('img[src]')].map((img) => img.src.split(/[?#]/)[0].split('/').pop().toLowerCase()));
   for (const candidate of candidates) {
+    if (candidate.matches('svg')) {
+      const width = Number.parseFloat(candidate.getAttribute('width'));
+      const height = Number.parseFloat(candidate.getAttribute('height'));
+      if (Number.isFinite(width) && Number.isFinite(height) && width <= 32 && height <= 32) continue;
+    }
     if (candidate.matches('svg') && candidate.closest('figure')) continue;
     const linked = candidate.closest('a[href]');
     if (linked) {

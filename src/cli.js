@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import os from 'node:os';
 import path from 'node:path';
+import { realpathSync } from 'node:fs';
 import { mkdir, rm, writeFile, readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { extractArticle } from './extract.js';
 import { renderDocument } from './render.js';
 import { captureRenderedPage, captureClientPage, startPreviewServer, printPdf, openPreview } from './browser.js';
@@ -98,4 +100,4 @@ export async function main(argv = process.argv.slice(2), { runPrint: execute = r
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname)) process.exitCode = await main();
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) process.exitCode = await main();

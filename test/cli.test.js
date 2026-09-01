@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, stat, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { JSDOM } from 'jsdom';
 import { captureRenderedPage, captureClientPage, populatePortraitPanels, waitForReadablePage } from '../src/browser.js';
@@ -93,6 +94,26 @@ test('main returns numeric success status for clean process exit', async () => {
     error: () => {},
   });
   assert.equal(result, 0);
+});
+
+test('linked executable runs the CLI through its symlink path', async () => {
+  const directory = await temporaryOutput();
+  const executable = path.join(directory, 'printer');
+  await symlink(fileURLToPath(new URL('../src/cli.js', import.meta.url)), executable);
+
+  const { spawn } = await import('node:child_process');
+  const result = await new Promise((resolve) => {
+    const child = spawn(executable, ['print', 'not-a-url'], { env: { ...process.env, PRINTER_OUTPUT_DIR: directory } });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.once('close', (code) => resolve({ code, stdout, stderr }));
+  });
+
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /valid url/i);
+  assert.equal(result.stdout, '');
 });
 
 test('captureRenderedPage falls back to direct article fetch for interstitial HTML', async () => {
