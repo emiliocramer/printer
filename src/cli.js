@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import os from 'node:os';
 import path from 'node:path';
-import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile, readFile } from 'node:fs/promises';
 import { extractArticle } from './extract.js';
 import { renderDocument } from './render.js';
-import { captureRenderedPage, startPreviewServer, printPdf, openPreview } from './browser.js';
+import { captureRenderedPage, captureClientPage, startPreviewServer, printPdf, openPreview } from './browser.js';
 
 export class CliError extends Error {}
 
@@ -30,16 +30,31 @@ export function resolveOutputPaths(input, { outputDir = process.env.PRINTER_OUTP
   const documentDir = path.join(rootDir, slug);
   return { rootDir, slug, documentDir, assetsDir: path.join(documentDir, 'assets'), htmlPath: path.join(documentDir, 'index.html'), stylesPath: path.join(documentDir, 'styles.css'), pdfPath: path.join(rootDir, `${slug}.pdf`) };
 }
+function captureUrl(input) {
+  const url = new URL(input);
+  for (const key of [...url.searchParams.keys()]) {
+    if (/^(?:utm_[^]+|fbclid|gclid|triedRedirect|r)$/i.test(key)) url.searchParams.delete(key);
+  }
+  return url.href;
+}
 
 export async function runPrint(input, options = {}) {
-  const url = validateUrl(input).href;
+  const url = captureUrl(validateUrl(input).href);
   const paths = resolveOutputPaths(url, options);
-  const browser = options.browser ?? { capture: captureRenderedPage, startPreview: startPreviewServer, pdf: printPdf, open: openPreview };
+  const browser = options.browser ?? { capture: captureRenderedPage, captureClient: captureClientPage, startPreview: startPreviewServer, pdf: printPdf, open: openPreview };
   await mkdir(paths.assetsDir, { recursive: true });
   let preview;
   try {
-    const captured = await browser.capture(url, { assetsDir: paths.assetsDir, playwright: options.playwright });
+    let captured;
+    try {
+      captured = await browser.capture(url, { assetsDir: paths.assetsDir, playwright: options.playwright });
+    } catch (error) {
+      if (error?.code !== 'PAGE_INACCESSIBLE' || typeof browser.captureClient !== 'function') throw error;
+      captured = await browser.captureClient(url, { assetsDir: paths.assetsDir, playwright: options.playwright });
+    }
     const article = options.extract ? await options.extract(captured.html, captured.finalUrl ?? url, options.retrievedDate) : extractArticle(captured.html, captured.finalUrl ?? url, options.retrievedDate);
+    const readableText = String(article?.content ?? '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!readableText || article?.metadata?.title === 'Untitled article') throw new CliError('The page loaded without readable article content.');
     const html = options.render ? options.render(article) : renderDocument(article);
     await writeFile(paths.htmlPath, html);
     const styles = await readFile(new URL('./styles.css', import.meta.url));
@@ -56,7 +71,10 @@ export async function runPrint(input, options = {}) {
       throw Object.assign(new CliError(`Could not load ${url}: ${error.message}`), { code: 'PAGE_INACCESSIBLE', cause: error });
     }
     throw error;
-  } finally { if (preview?.close) await preview.close(); }
+  } finally {
+    if (preview?.close) await preview.close();
+    if (options.keepSource === false) await rm(paths.documentDir, { recursive: true, force: true });
+  }
 }
 
 export function parseArgs(argv = process.argv.slice(2)) {
@@ -71,7 +89,7 @@ export function parseArgs(argv = process.argv.slice(2)) {
 export async function main(argv = process.argv.slice(2), { runPrint: execute = runPrint, log = console.log, error = console.error } = {}) {
   try {
     const args = parseArgs(argv);
-    const result = await execute(args.url, args);
+    const result = await execute(args.url, { ...args, keepSource: false });
     log(`Wrote ${result.paths.pdfPath}`);
     return 0;
   } catch (cause) {
