@@ -27,7 +27,6 @@ body { margin: 0; background: var(--paper); font-family: var(--font-body); line-
 .cover-author { margin: 0; }
 .cover-date { margin: 0; }
 .provenance-page img, .provenance-page svg, .provenance-page canvas, .provenance-page video { display: none !important; }
-.article-page { break-before: page; page-break-before: always; }
 .timeline-event picture, .timeline-event img, .timeline-event svg { position: static !important; inset: auto !important; display: block; width: auto; max-width: 100%; height: auto; max-height: 1.5in; object-fit: contain; }
 .timeline-event picture { margin: .05in 0 .08in; }
 .article-content img, .article-content picture, .article-content svg { position: static !important; inset: auto !important; display: block; max-width: 100%; height: auto; }
