@@ -73,4 +73,4 @@ pre, code { font-family: "SFMono-Regular", Consolas, monospace; font-size: .84em
 pre { overflow-wrap: anywhere; white-space: pre-wrap; padding: .14in; background: #eef2ef; border-left: 3px solid var(--accent); break-inside: avoid; }
 blockquote { margin: .22in 0; padding: .05in .2in; border-left: 3px solid var(--accent); color: #3a4847; break-inside: avoid; }
 blockquote.timeline-reasoning { border-left: 0; padding-left: 0; }
-@media screen { body { max-width: 8.5in; margin: 0 auto; padding: .45in; } }
+@media screen { body { max-width: 8.5in; margin: 0 auto; } }
