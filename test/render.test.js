@@ -53,7 +53,7 @@ test('renders an academic title page before the article', () => {
   );
   assert.equal(provenance.querySelector('h1').textContent, 'A measured history');
   assert.match(provenance.textContent, /Ada Lovelace/);
-  assert.match(provenance.textContent, /2026-08-30/);
+  assert.match(provenance.textContent, /Sunday, August 30, 2026/);
   assert.equal(provenance.querySelector('.source-url'), null);
   assert.equal(document.querySelector('link[rel="stylesheet"]').getAttribute('href'), './styles.css');
 });
@@ -67,7 +67,7 @@ test('uses a centered academic title page without web-publishing chrome', () => 
   assert.equal(cover.querySelectorAll('h1').length, 1);
   assert.equal(cover.querySelector('h1').textContent, 'A measured history');
   assert.match(cover.querySelector('.cover-author').textContent, /Ada Lovelace/);
-  assert.match(cover.querySelector('.cover-date').textContent, /2026-08-30/);
+  assert.match(cover.querySelector('.cover-date').textContent, /Sunday, August 30, 2026/);
   assert.equal(cover.querySelector('.cover-publication'), null);
   assert.equal(cover.querySelector('.cover-reading'), null);
   assert.equal(cover.querySelector('.source-url'), null);

@@ -1,6 +1,6 @@
 @page {
   size: Letter portrait;
-  margin: 0.75in 1in 0.78in;
+  margin: 1in;
   @bottom-right { content: "Page " counter(page) " of " counter(pages); font: 8pt Arial, sans-serif; color: #66706f; }
 }
 
@@ -35,7 +35,8 @@ body { margin: 0; background: var(--paper); font-family: var(--font-body); line-
 .provenance-details { display: none; }
 .source-url { string-set: source-url content(); }
 .provenance-note { display: none; }
-.article-content { max-width: 6.5in; margin: 0 auto; font: 11.5pt/1.58 var(--font-body); text-wrap: pretty; }
+.article-content { width: 100%; max-width: 6.5in; margin: 0 auto; font: 11.5pt/1.58 var(--font-body); text-wrap: pretty; }
+.article-content > * { width: 100%; max-width: 100%; margin-left: 0; margin-right: 0; }
 .article-content > h1, .article-content > h2, .article-content > h3, .article-content > h4, .article-content > h5, .article-content > h6 { font-family: var(--font-display); break-after: avoid; page-break-after: avoid; break-inside: avoid; page-break-inside: avoid; line-height: 1.18; text-wrap: balance; }
 .article-content > h1 { font-size: 26pt; }
 .article-content > h2 { margin-top: .35in; font-size: 19pt; }

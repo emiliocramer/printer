@@ -11,6 +11,20 @@ function value(value, fallback = 'Not provided') {
   return text || fallback;
 }
 
+function displayDate(raw) {
+  const text = String(raw ?? '').trim();
+  if (!text) return 'Not provided';
+  const date = new Date(text.length === 10 ? `${text}T00:00:00Z` : text);
+  if (Number.isNaN(date.getTime())) return text;
+  return new Intl.DateTimeFormat('en-US', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+    timeZone: 'UTC',
+  }).format(date);
+}
+
 function sourceHref(raw) {
   try {
     const url = new URL(String(raw ?? '').trim());
@@ -30,7 +44,7 @@ export function provenancePage(metadata = {}) {
   <div class="cover-title-block">
     <h1 id="provenance-title" class="provenance-title">${escapeHtml(title)}</h1>
     <p class="cover-author">${escapeHtml(value(metadata.author))}</p>
-    <p class="cover-date">${escapeHtml(value(metadata.published))}</p>
+    <p class="cover-date">${escapeHtml(displayDate(metadata.published))}</p>
   </div>
 </section>`;
 }
