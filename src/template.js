@@ -26,25 +26,12 @@ function metadataRow(label, content, className = '') {
 
 export function provenancePage(metadata = {}) {
   const title = value(metadata.title, 'Untitled article');
-  const href = sourceHref(metadata.sourceUrl);
-  const source = href
-    ? `<a class="source-url" href="${escapeHtml(href)}">${escapeHtml(href)}</a>`
-    : escapeHtml(value(metadata.sourceUrl));
-  const minutes = Number.isFinite(Number(metadata.estimatedReadingTime))
-    ? Math.max(0, Math.ceil(Number(metadata.estimatedReadingTime)))
-    : 0;
-  return `<section class="provenance-page" data-page="provenance" aria-labelledby="provenance-title">
-  <p class="eyebrow">Print provenance</p>
-  <h1 id="provenance-title" class="provenance-title">${escapeHtml(title)}</h1>
-  <dl class="provenance-details">
-    ${metadataRow('Author', escapeHtml(value(metadata.author)))}
-    ${metadataRow('Publication date', escapeHtml(value(metadata.published)))}
-    ${metadataRow('Source URL', source)}
-    ${metadataRow('Retrieved', escapeHtml(value(metadata.retrieved)))}
-    ${metadataRow('Reading time', `${minutes} minute${minutes === 1 ? '' : 's'}`)}
-    ${metadataRow('Print estimate', '<span data-print-page-estimate>Page count calculated during print</span>')}
-  </dl>
-  <p class="provenance-note">Prepared for portrait print; page numbers and source URL are retained in the footer.</p>
+  return `<section class="provenance-page academic-title-page" data-page="provenance" aria-labelledby="provenance-title">
+  <div class="cover-title-block">
+    <h1 id="provenance-title" class="provenance-title">${escapeHtml(title)}</h1>
+    <p class="cover-author">${escapeHtml(value(metadata.author))}</p>
+    <p class="cover-date">${escapeHtml(value(metadata.published))}</p>
+  </div>
 </section>`;
 }
 
