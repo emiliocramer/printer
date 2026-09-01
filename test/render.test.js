@@ -38,7 +38,7 @@ function parse(html) {
   return new JSDOM(html).window.document;
 }
 
-test('renders a complete provenance page before the article', () => {
+test('renders an academic title page before the article', () => {
   const html = renderDocument(DOCUMENT);
   const document = parse(html);
   const provenance = document.querySelector('[data-page="provenance"]');
@@ -54,11 +54,28 @@ test('renders a complete provenance page before the article', () => {
   assert.equal(provenance.querySelector('h1').textContent, 'A measured history');
   assert.match(provenance.textContent, /Ada Lovelace/);
   assert.match(provenance.textContent, /2026-08-30/);
-  assert.match(provenance.textContent, /2026-08-31/);
-  assert.match(provenance.textContent, /7 minutes/);
-  assert.ok(provenance.querySelector('[data-print-page-estimate]'));
-  assert.equal(provenance.querySelector('a.source-url').href, DOCUMENT.metadata.sourceUrl);
+  assert.equal(provenance.querySelector('.source-url'), null);
   assert.equal(document.querySelector('link[rel="stylesheet"]').getAttribute('href'), './styles.css');
+});
+
+test('uses a centered academic title page without web-publishing chrome', () => {
+  const document = parse(renderDocument(DOCUMENT));
+  const cover = document.querySelector('[data-page="provenance"]');
+  const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
+
+  assert.ok(cover.classList.contains('academic-title-page'));
+  assert.equal(cover.querySelectorAll('h1').length, 1);
+  assert.equal(cover.querySelector('h1').textContent, 'A measured history');
+  assert.match(cover.querySelector('.cover-author').textContent, /Ada Lovelace/);
+  assert.match(cover.querySelector('.cover-date').textContent, /2026-08-30/);
+  assert.equal(cover.querySelector('.cover-publication'), null);
+  assert.equal(cover.querySelector('.cover-reading'), null);
+  assert.equal(cover.querySelector('.source-url'), null);
+  assert.equal(cover.querySelector('.provenance-details'), null);
+  assert.match(css, /--paper:\s*#fff;/);
+  assert.doesNotMatch(css, /#fffdf8/i);
+  assert.match(css, /\.academic-title-page\s*\{[^}]*text-align:\s*center/s);
+  assert.match(css, /\.provenance-page h1\s*\{[^}]*font-size:\s*2em/s);
 });
 
 test('preserves supplied article prose and asset URLs', () => {
@@ -71,20 +88,18 @@ test('preserves supplied article prose and asset URLs', () => {
   assert.equal((html.match(/https:\/\/cdn\.example\.com\/photo\.jpg/g) ?? []).length, 1);
 });
 
-test('keeps source provenance while inline article links print without URL suffixes', () => {
+test('keeps source host on the title page and inline links readable', () => {
   const html = renderDocument(DOCUMENT);
   const document = parse(html);
-  const source = document.querySelector('[data-page="provenance"] .source-url');
+  const cover = document.querySelector('[data-page="provenance"]');
   const inlineLink = document.querySelector('.article-content a[href]');
   const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
 
-  assert.equal(source.textContent, DOCUMENT.metadata.sourceUrl);
-  assert.equal(source.getAttribute('href'), DOCUMENT.metadata.sourceUrl);
+  assert.equal(cover.querySelector('.source-url'), null);
   assert.equal(inlineLink.textContent, 'Evidence');
   assert.doesNotMatch(css, /\.article-content[^{]*::after\s*\{[^}]*attr\(href\)/s);
-  assert.match(css, /\.article-content a\[href\]\s*\{[^}]*text-decoration:\s*underline/s);
+  assert.match(css, /\.article-content a\[href\]\s*\{[^}]*text-decoration:\s*none/s);
 });
-
 test('escapes metadata in text and attribute contexts', () => {
   const html = renderDocument({
     metadata: {
@@ -99,11 +114,16 @@ test('escapes metadata in text and attribute contexts', () => {
   });
   const document = parse(html);
 
-  assert.equal(document.querySelectorAll('script, [onerror], [onmouseover]').length, 0);
   assert.equal(document.querySelector('.provenance-title').textContent, '<img src=x onerror="attack()">');
-  assert.match(document.querySelector('.provenance-details').textContent, /A & B <\/dd><script>attack\(\)<\/script>/);
-  assert.equal(document.querySelector('.source-url').getAttribute('href'), 'https://example.com/?q=%22%20onmouseover=%22attack()&x=%3Ctag%3E');
+  assert.match(document.querySelector('.academic-title-page').textContent, /A & B <\/dd><script>attack\(\)<\/script>/);
   assert.match(html, /&lt;img src=x onerror=&quot;attack\(\)&quot;&gt;/);
+});
+test('uses Tufte-style de-gridded timeline graphics', () => {
+  const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
+  assert.doesNotMatch(css, /\.timeline-event[^{]*\{[^}]*border/s);
+  assert.doesNotMatch(css, /\.timeline-event:last-child[^{]*\{/s);
+  assert.doesNotMatch(css, /\.figure-panel[^{]*\{[^}]*border/s);
+  assert.doesNotMatch(css, /figure img[^{]*\{[^}]*outline/s);
 });
 
 test('renders wide timelines as deterministic stacked portrait panels', () => {

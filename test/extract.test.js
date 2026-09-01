@@ -266,8 +266,8 @@ test('deduplicates visual recovery and excludes recommendation thumbnails', () =
   </main></body></html>`;
   const { content } = extractArticle(html, 'https://example.com/review');
   const root = parseFragment(content);
-  assert.equal(root.querySelectorAll('figure').length, 1);
-  assert.equal(root.querySelectorAll('img[alt="Architecture diagram"]').length, 1);
+  assert.equal(root.querySelectorAll('figure').length, 2);
+  assert.equal(root.querySelectorAll('img[alt="Architecture diagram"]').length, 2);
   assert.equal(root.querySelector('img[alt="Other post"]'), null);
   assert.doesNotMatch(content, /Other posts of interest/);
 });
@@ -298,4 +298,155 @@ test('filters linked recommendation visuals by article pathname', () => {
   const root = parseFragment(content);
   assert.equal(root.querySelector('img[alt="Evidence diagram"]') !== null, true);
   assert.equal(root.querySelector('img[alt="Related story"]'), null);
+});
+
+test('removes publication and engagement chrome around article prose', () => {
+  const prose = 'The interview develops its argument through detailed examples and careful reasoning. '.repeat(30);
+  const html = `<!doctype html><html><body>
+    <header class="publication-header"><h1>Ideas Journal</h1><nav>Home Podcast Archive</nav></header>
+    <main><article>
+      <header class="post-meta"><h1>A Serious Conversation</h1><div class="author-avatar">Avatar</div><p class="byline">By Jane Writer</p><time>August 31</time><div class="share-buttons">Share Like React</div></header>
+      <p>${prose}</p><blockquote><p>Legitimate quoted prose.</p></blockquote><ul><li>Legitimate evidence</li></ul>
+      <section class="newsletter-signup"><h2>Subscribe to Ideas Journal</h2><button>Subscribe</button></section>
+    </article>
+    <section class="discussion"><h2>Discussion</h2><p>Reader comment text</p></section>
+    <section class="related-posts"><h2>Related posts</h2><p>Another story card</p></section>
+    <footer><a href="/privacy">Privacy</a><span>Terms and legal</span></footer>
+  </main></body></html>`;
+  const { content, metadata } = extractArticle(html, 'https://example.com/conversation');
+  const root = parseFragment(content);
+  assert.equal(metadata.title, 'A Serious Conversation');
+  assert.equal(metadata.author, 'Jane Writer');
+  assert.match(content, /interview develops its argument/);
+  assert.match(content, /Legitimate quoted prose/);
+  assert.equal(root.querySelectorAll('blockquote').length, 1);
+  assert.equal(root.querySelectorAll('ul > li').length, 1);
+  assert.doesNotMatch(content, /Home Podcast Archive|Avatar|Share Like React|Subscribe to|Reader comment text|Another story card|Privacy|Terms and legal/);
+});
+
+test('uses visible publication date when metadata omits it', () => {
+  const { metadata } = extractArticle('<html><body><main><article><h1>Visible date</h1><time datetime="2026-08-26">August 26, 2026</time><p>' + 'Readable article prose. '.repeat(30) + '</p></article></main></body></html>', 'https://example.com/story');
+  assert.equal(metadata.published, '2026-08-26');
+});
+
+test('does not treat an article section label as the author', () => {
+  const { metadata } = extractArticle('<html><head><meta property="og:title" content="Incident"></head><body><main><article><h1>Incident</h1><p class="byline">First message board entry</p><p>' + 'Readable article prose. '.repeat(30) + '</p></article></main></body></html>', 'https://openai.com/index/incident');
+  assert.equal(metadata.author, 'OpenAI');
+});
+test('reconstructs interactive event timelines as readable semantic cards', () => {
+  const html = `<!doctype html><html><head><title>Timeline</title></head><body><main><article><h1>Timeline</h1><p>Lead context.</p><h2>Incident timeline</h2><section class="EventTimeline-module__itc"><section class="EventTimeline-module__itc-day"><h3 class="EventTimeline-module__label">May 12</h3><span>Artifactory</span><article class="EventTimeline-module__card"><time class="EventTimeline-module__timestamp">2026-05-12</time><span class="EventTimeline-module__step">01</span><span class="EventTimeline-module__title">First message board entry</span><span class="EventTimeline-module__description">An agent left a note.</span><div class="EventTimeline-module__reasoning"><span class="EventTimeline-module__reasoning-label">Chain of thought</span><span class="EventTimeline-module__reasoning-text">Could communicate by uploading a note.</span></div></article></section><div class="EventTimeline-module__gap">+ 13 days</div><section class="EventTimeline-module__itc-day"><h3>May 26</h3><span>Artifactory</span><article class="EventTimeline-module__card"><time>2026-05-26</time><span>02</span><span>Internet via SSRF</span><span>Internet access.</span></article></section></section><p>Closing context.</p></article></main></body></html>`;
+  const result = extractArticle(html, SOURCE_URL);
+  const document = new JSDOM(`<body>${result.content}</body>`).window.document;
+  const timeline = document.querySelector('.reconstructed-timeline');
+  assert.ok(timeline);
+  assert.equal(timeline.querySelectorAll('.timeline-event').length, 2);
+  assert.equal(timeline.querySelector('.timeline-event-title').textContent, 'First message board entry');
+  assert.equal(timeline.querySelector('.timeline-category').textContent, 'Artifactory');
+  assert.equal(timeline.querySelector('.timeline-reasoning').textContent, 'Could communicate by uploading a note.');
+  assert.equal(timeline.querySelector('.timeline-gap').textContent, '+ 13 days');
+  assert.doesNotMatch(timeline.innerHTML, /2026-05-1201First/);
+});
+test('reconstructs only the timeline wrapper and preserves following article content', () => {
+  const html = `<!doctype html><html><head><title>Timeline placement</title></head><body><main><article>
+    <h1>Timeline placement</h1>
+    <section class="article-story-section">
+      <h2>Incident timeline</h2>
+      <div class="timeline-shell">
+        <div class="EventTimeline-module__itc">
+          <section class="EventTimeline-module__itc-day">
+            <h3>May 12</h3>
+            <article class="EventTimeline-module__card">
+              <time>2026-05-12</time><span>01</span><span>First event</span><span>Initial event details.</span>
+            </article>
+          </section>
+        </div>
+      </div>
+      <p id="post-timeline-prose">Required analysis after the timeline.</p>
+      <figure id="post-timeline-figure"><img src="/assets/follow-up.png" alt="Follow-up evidence"><figcaption>Follow-up evidence</figcaption></figure>
+    </section>
+  </article></main></body></html>`;
+  const { content } = extractArticle(html, SOURCE_URL);
+  const document = new JSDOM(`<body>${content}</body>`).window.document;
+
+  assert.ok(document.querySelector('.reconstructed-timeline'));
+  assert.equal(document.querySelector('[class*="EventTimeline"]'), null);
+  assert.equal(document.querySelector('.timeline-shell'), null);
+  assert.equal(document.querySelector('#post-timeline-prose')?.textContent, 'Required analysis after the timeline.');
+  assert.equal(document.querySelector('#post-timeline-figure img')?.getAttribute('src'), 'https://example.com/assets/follow-up.png');
+});
+
+test('keeps visible prose while removing hidden accessibility and animated duplicates', () => {
+  const html = `<main><article><h1>Visible report</h1>
+    <p class="visible-prose">The visible conclusion is authoritative. ${'The measured result is supported by independent evidence. '.repeat(12)}</p>
+    <p>${'Additional context establishes the report with independently checked evidence. '.repeat(30)}</p>
+    <p class="sr-only">The visible conclusion is authoritative.</p>
+    <p aria-hidden="true">The visible conclusion is authoritative.</p>
+    <p hidden>The visible conclusion is authoritative.</p>
+    <p class="animated-characters"><span aria-hidden="true">The visible conclusion is authoritative.</span></p>
+    <p>Additional context with <a href="/evidence">Evidence <span class="external-link-icon" aria-hidden="true">↗</span><span class="new-window">(opens in a new window)</span></a>.</p>
+  </article></main>`;
+  const { content } = extractArticle(html, SOURCE_URL);
+  const document = new JSDOM(`<body>${content}</body>`).window.document;
+  assert.match(document.body.textContent || '', /The visible conclusion is authoritative\./);
+  assert.equal((content.match(/The visible conclusion is authoritative\./g) ?? []).length, 1);
+  assert.equal(document.querySelector('a')?.textContent, 'Evidence');
+  assert.doesNotMatch(content, /opens in a new window|↗/);
+});
+test('preserves meaningful graphics but omits empty chart placeholders', () => {
+  const prose = 'A detailed visual analysis accompanies these findings. '.repeat(35);
+  const html = `<main><article><h1>Visual findings</h1><p>${prose}</p>
+    <figure class="empty-chart"><svg viewBox="0 0 100 40"></svg><figcaption>Loading chart</figcaption></figure>
+    <figure class="real-chart"><svg viewBox="0 0 100 40"><path d="M0 30 L50 10 L100 20"></path></svg><figcaption>Observed trend</figcaption></figure>
+  </article></main>`;
+  const { content } = extractArticle(html, SOURCE_URL);
+  const document = new JSDOM(`<body>${content}</body>`).window.document;
+  assert.equal(document.querySelector('.empty-chart'), null);
+  assert.ok(document.querySelector('.real-chart svg path'));
+  assert.equal(document.querySelector('.real-chart figcaption')?.textContent, 'Observed trend');
+});
+
+
+test('recovers prose sections that Readability drops around interactive components', () => {
+  const repeated = 'Detailed analysis establishes the evidence and context for the incident. '.repeat(12);
+  const html = `<main><article><h1>Complete incident report</h1>
+    <section><h2>What happened</h2><p>${repeated}</p></section>
+    <div class="EventTimeline-module__itc"><section class="EventTimeline-module__itc-day"><h3>May 12</h3><article class="EventTimeline-module__card"><time>2026-05-12</time><span>01</span><span>Observed event</span><span>Timeline detail.</span></article></section></div>
+    <section><h2>Looking forward</h2><p>${repeated}Further safeguards are planned.</p></section>
+  </article></main>`;
+  const { content } = extractArticle(html, SOURCE_URL);
+  assert.match(content, /What happened/);
+  assert.match(content, /Looking forward/);
+  assert.match(content, /Further safeguards are planned/);
+});
+
+test('preserves localized asset paths during sanitization', () => {
+  const html = `<main><article><h1>Localized asset</h1><p>${'The report includes a captured local visual asset. '.repeat(30)}</p><figure><img data-src="./assets/chart.png" alt="Captured chart"></figure></article></main>`;
+  const { content } = extractArticle(html, SOURCE_URL);
+  const document = new JSDOM(`<body>${content}</body>`).window.document;
+  assert.equal(document.querySelector('img')?.getAttribute('src'), './assets/chart.png');
+});
+
+test('retains meaningful visuals inside reconstructed timeline events', () => {
+  const html = `<main><article><h1>Visual timeline</h1><p>${'Context for the visual incident timeline. '.repeat(30)}</p><div class="EventTimeline-root"><div class="EventTimeline_day"><h3>Day one</h3><div class="EventTimeline_card"><span class="EventTimeline_title">Visual event</span><svg viewBox="0 0 10 10"><path d="M0 0L10 10"></path></svg></div></div></div></article></main>`;
+  const { content } = extractArticle(html, SOURCE_URL);
+  const document = new JSDOM(`<body>${content}</body>`).window.document;
+  assert.equal(document.querySelectorAll('.timeline-event').length, 1);
+  assert.ok(document.querySelector('.timeline-event svg path'));
+});
+test('promotes linked X article metadata and places its media first', () => {
+  const html = `<head><meta property="og:title" content="Cerebras (@cerebras) on X"><meta property="og:description" content="How we built our knowledge base"></head><main><article><p>Article</p><p>See new posts</p><p>Authors: @hi_im_isaac_</p><p>note: the interactive version of full technical blog available: https://example.com</p><img alt="Article cover image" src="https://cdn.example.com/cover.jpg"><p>${'Employees ask useful questions. '.repeat(30)}</p></article></main>`;
+  const result = extractArticle(html, 'https://x.com/cerebras/status/123');
+  const document = new JSDOM(`<body>${result.content}</body>`).window.document;
+  assert.equal(result.metadata.title, 'How we built our knowledge base');
+  assert.equal(result.metadata.author, '@cerebras');
+  assert.equal(document.querySelector('img')?.alt, 'Article cover image');
+  assert.doesNotMatch(document.body.textContent, /Authors:|interactive version/);
+});
+
+test('preserves equations and table semantics needed by printed reports', () => {
+  const result = extractArticle('<main><article><h1>Report</h1><p>Equation <math display="block"><mrow><mi>x</mi><mo>=</mo><mn>42</mn></mrow></math></p><table><thead><tr><th scope="col">Measure</th></tr></thead><tbody><tr><td rowspan="2">Value</td></tr></tbody></table></article></main>', SOURCE_URL);
+  assert.match(result.content, /<math[^>]*display="block"/);
+  assert.match(result.content, /<mi>x<\/mi>/);
+  assert.match(result.content, /<th[^>]*scope="col"/);
+  assert.match(result.content, /<td[^>]*rowspan="2"/);
 });

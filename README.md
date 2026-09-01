@@ -1,37 +1,64 @@
-# printer
+# Printer
 
-Turn readable public web pages into clean, portrait-first PDFs for printing.
+`printer` turns a public web article into a print-ready Letter PDF.
 
-## Setup
+It captures rendered pages in Chromium, removes web-only chrome, recovers readable article content, localizes images and SVG assets, reconstructs interactive timelines, and lays out the result for paper.
 
-```sh
+## Usage
+
+```bash
 npm install
 npx playwright install chromium
+npm run print -- https://example.com/article
 ```
 
-## Use
+Or, after linking the package:
 
-```sh
-node src/cli.js print https://example.com/article
+```bash
+npm link
+printer print https://example.com/article
 ```
 
-The command opens a local preview and writes:
+The PDF is written to:
 
-- `~/Documents/printer/<slug>.pdf`
-- `~/Documents/printer/<slug>/index.html`
-- `~/Documents/printer/<slug>/styles.css`
-- `~/Documents/printer/<slug>/assets/`
+```text
+~/Documents/printer/<safe-url-slug>.pdf
+```
 
-Use `--no-preview` for unattended runs. Set `PRINTER_OUTPUT_DIR` to change the output directory. The preview is the same HTML that Chromium prints, so page breaks, figures, captions, and typography can be checked before printing.
+Intermediate HTML and asset files are removed automatically after a successful CLI run. The output directory therefore contains PDFs only.
 
-## Rendering behavior
+For sites that require an interactive browser challenge, omit `--no-preview` or use the client-capture path when prompted:
 
-The pipeline loads client-rendered pages, removes navigation and subscription chrome, extracts readable content, preserves semantic rich content and meaningful figures, localizes downloadable images, and adds a provenance page. Wide charts and timelines are marked for portrait panel treatment; ordinary figures remain intact. Inline links stay readable while the source URL remains on the provenance page.
+```bash
+printer print https://example.com/article
+```
 
-It can fall back from a browser interstitial to a direct public HTML request. It does not bypass authentication, paywalls, bot challenges, or private browser sessions; those pages currently require a public URL or an authenticated export workflow outside this CLI.
+## What it preserves
 
-## Test
+- Article title, author, and publication date
+- Headings, paragraphs, lists, tables, equations, quotations, and code
+- Meaningful source images, SVGs, GIFs, and other visual assets
+- Lazy-loaded graphics and responsive source media
+- Interactive event timelines reconstructed as readable semantic cards
+- Wide timelines and charts split into portrait-friendly panels
 
-```sh
+## Print conventions
+
+- Letter portrait
+- Consistent 1-inch left and right margins for hole punching
+- White, graphic-free cover page with title, author, and date
+- Article graphics constrained to the same printable column
+- No visible URL decorations or web publication chrome
+- Page numbers in the footer
+
+## Development
+
+```bash
 npm test
 ```
+
+The test suite covers capture fallbacks, extraction cleanup, metadata, asset localization, timeline reconstruction, portrait layout, X article handling, and PDF generation orchestration.
+
+## Scope
+
+The tool accepts public HTTP(S) URLs. Some sites deliberately block automated access or require account authentication; those may require completing a browser verification step. The extractor prefers faithful source content over inventing missing metadata or graphics.

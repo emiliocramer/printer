@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { JSDOM } from 'jsdom';
-import { captureRenderedPage, populatePortraitPanels } from '../src/browser.js';
+import { captureRenderedPage, captureClientPage, populatePortraitPanels, waitForReadablePage } from '../src/browser.js';
 import {
   CliError,
   resolveOutputPaths,
@@ -78,6 +78,7 @@ test('captureRenderedPage collects SVG image hrefs without invalid selectors', a
       playwright: { chromium: { async launch() { return { async newPage() { return page; }, async close() {} }; } } },
     });
     assert.match(result.html, /chart\.svg/);
+    assert.ok((await stat(path.join(assetsDir, 'chart.svg'))).isFile());
   } finally { globalThis.fetch = originalFetch; }
 });
 async function temporaryOutput() {
@@ -112,6 +113,20 @@ test('captureRenderedPage falls back to direct article fetch for interstitial HT
     assert.match(result.html, /Readable story/);
     assert.equal(result.finalUrl, 'https://example.test/article');
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test('waitForReadablePage waits for a challenge page to resolve', async () => {
+  let attempts = 0;
+  const page = {
+    async content() {
+      attempts += 1;
+      return attempts < 3 ? '<body>Verify you are human</body>' : '<body><article>Readable article</article></body>';
+    },
+    async waitForTimeout() {},
+  };
+  const html = await waitForReadablePage(page, { timeoutMs: 100, intervalMs: 1 });
+  assert.match(html, /Readable article/);
+  assert.equal(attempts, 3);
 });
 
 test('populatePortraitPanels clips a wide timeline into readable continuation panels', async () => {
@@ -262,4 +277,18 @@ test('runPrint reports inaccessible pages and missing Chromium usefully', async 
       expected,
     );
   }
+});
+
+test('runPrint falls back to client capture after an access challenge', async () => {
+  const outputDir = await temporaryOutput();
+  const calls = [];
+  const inaccessible = Object.assign(new Error('challenge'), { code: 'PAGE_INACCESSIBLE' });
+  const browser = {
+    async capture() { calls.push('headless'); throw inaccessible; },
+    async captureClient(url) { calls.push(['client', url]); return { html: '<html><head><title>Client article</title></head><body><article><h1>Client article</h1><p>Readable article body.</p></article></body></html>', finalUrl: url }; },
+    async startPreview() { calls.push('serve'); return { url: 'http://127.0.0.1:40001/', async close() { calls.push('close'); } }; },
+    async pdf(_url, outputPath) { calls.push('pdf'); const { writeFile } = await import('node:fs/promises'); await writeFile(outputPath, '%PDF-fake'); },
+  };
+  await runPrint('https://example.com/challenged', { outputDir, browser, noPreview: true });
+  assert.deepEqual(calls, ['headless', ['client', 'https://example.com/challenged'], 'serve', 'pdf', 'close']);
 });
