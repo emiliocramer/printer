@@ -28,7 +28,7 @@ const ATTRS = {
 };
 const URL_ATTRS = new Set(['href','src','poster','cite','data','xlink:href']);
 const CHROME_TOKENS = /(?:^|[-_\s])(subscribe|subscription|paywall|comment|comments|discussion|share|sharing|social|reaction|related|recommendation|recommendations|footer|legal|avatar|masthead|publication-header|main-menu|portable-archive|post-ufi|like-button|ready-for-more|channel-frame|session-attribution|visitedsurfacesiframe|post-label)(?:$|[-_\s])/i;
-const CHROME_HEADING = /^(subscribe|join|discussion|comments?|related posts?|recommended|recommendations|more from|you may also like|ready for more)\b/i;
+const CHROME_HEADING = /^(subscribe|join|discussion|comments?|related posts?|recommended|recommendations|more from|you may also like|ready for more|explore more|most popular|most read|trending|up next|read next|further reading|about the author)\b/i;
 const PRINTER_ATTRS = new Set(['data-printer-box','data-printer-natural','data-printer-src','data-printer-asset']);
 const SAFE_DATA_ATTRS = new Set(['data-footnote-ref','data-footnote-backref','data-src','data-srcset', ...PRINTER_ATTRS]);
 const DECORATIVE_NAME = /(?:^|[^a-z])(logo|logos|icon|icons|avatar|avatars|emoji|badge|spinner|loader|loading|placeholder|pixel|tracker|tracking|sprite|arrow|chevron|caret|bullet|divider|separator|accent|ornament|thumb|thumbnail|favicon|profile)(?:$|[^a-z])/i;
@@ -154,9 +154,11 @@ function isHiddenElement(element) {
     element.getAttribute('aria-hidden') === 'true' || HIDDEN_CLASS.test(String(element.className || ''));
 }
 
+const CHROME_FRAGMENTS = /InContentBarrier|SkipLink|skip-link|skiplink|ChannelCloud|paywall|regwall|piano-|breadcrumb|TagCloud|tag-cloud|taglist|tag-list|ArticleTags|ArticleBio|author-bio|AuthorBio|Recirc|recirculation|MostPopular|most-popular|Leaflet|RelatedContent|related-content|ExploreMore|explore-more/i;
 function isChromeElement(element) {
-  const identity = `${element.id || ''} ${element.className || ''} ${element.getAttribute?.('role') || ''}`;
-  if (CHROME_TOKENS.test(identity)) return true;
+  const identity = `${element.id || ''} ${element.className || ''} ${element.getAttribute?.('role') || ''} ${element.getAttribute?.('data-testid') || ''}`;
+  if (CHROME_TOKENS.test(identity) || CHROME_FRAGMENTS.test(identity)) return true;
+  if (element.matches?.('a[href^="#"]') && /^skip to/i.test(element.textContent.trim())) return true;
   if (/^(navigation|contentinfo|dialog)$/.test(element.getAttribute?.('role') || '')) return true;
   return /^(H2|H3|H4)$/.test(element.tagName) && CHROME_HEADING.test(element.textContent.trim());
 }
@@ -283,11 +285,16 @@ function mergeVisuals(contentRoot, sourceDocument, sourceUrl) {
   const proseIndexes = sourceBlocks.map((block, index) => (!block.matches('figure, picture, img, svg') && textIndex.has(normalizedText(block)) ? index : -1)).filter((index) => index >= 0);
   const firstProse = proseIndexes[0] ?? -1;
   const lastProse = proseIndexes.at(-1) ?? -1;
+  // When the prose lives inside an <article>, visuals outside that element
+  // belong to the page, not the story.
+  const proseArticle = firstProse >= 0 ? sourceBlocks[firstProse].closest('article') : null;
   for (const candidate of candidates) {
     if (candidate.closest('nav, footer, aside, button, form, [role="button"], [role="navigation"], [role="contentinfo"], [aria-hidden="true"], [hidden]')) continue;
     if (candidate.closest('header') && !candidate.closest('article')) continue;
+    const candidateArticle = candidate.closest('article');
+    if (proseArticle && candidateArticle && candidateArticle !== proseArticle) continue;
     if (candidate.closest('[class*="share" i], [class*="social" i], [class*="comment" i], [class*="recommend" i], [class*="related" i], [class*="subscribe" i], [class*="avatar" i], [class*="byline" i], [class*="profile" i], [class*="author" i]')) continue;
-    if (candidate.closest('[class*="featured" i], [class*="teaser" i], [class*="promo" i], [class*="newsletter" i], [class*="widget" i], [class*="sidebar" i], [class*="cta" i], [class*="banner" i], [class*="carousel" i], [class*="slider" i], [class*="popular" i], [class*="trending" i], [class*="tab-pane" i], [id*="related" i], [id*="recommend" i]')) continue;
+    if (candidate.closest('[class*="featured" i], [class*="teaser" i], [class*="promo" i], [class*="widget" i], [class*="sidebar" i], [class*="cta" i], [class*="banner" i], [class*="carousel" i], [class*="slider" i], [class*="popular" i], [class*="trending" i], [class*="tab-pane" i], [id*="related" i], [id*="recommend" i]')) continue;
     const linked = candidate.closest('a[href]');
     if (linked) {
       try {
@@ -488,7 +495,7 @@ function reconstructTimeline(sourceDocument, contentRoot, sourceUrl) {
 function removeRecommendationContent(root) {
   const elements = [...root.querySelectorAll('*')];
   const headings = elements.filter((element) => /^(H2|H3|H4)$/.test(element.tagName));
-  const recommendation = /other posts of interest|recommended|recommendations|more from|you may also like/i;
+  const recommendation = /other posts of interest|recommended|recommendations|more from|you may also like|explore more|more topics|most popular|most read|trending|related (?:stories|articles|posts|content|reading)|read (?:more|next)|up next|latest (?:stories|articles|from)|popular (?:stories|articles|posts)|don(?:'|’)t miss|further reading/i;
   for (const heading of headings) {
     if (!recommendation.test(heading.textContent)) continue;
     const container = heading.closest('section, aside, [class*="recommend" i], [class*="related" i]');
@@ -523,6 +530,20 @@ function cleanXArticle(contentRoot, info) {
   }
   const visual = contentRoot.querySelector('figure, img, picture, svg');
   if (visual) contentRoot.prepend(visual);
+}
+
+const PAYWALL_MARKERS = [
+  [/property=["']article:content_tier["'][^>]*content=["'](metered|locked|premium|paid|subscription)["']|content=["'](metered|locked|premium|paid|subscription)["'][^>]*property=["']article:content_tier["']/i, 'content-tier'],
+  [/["']isAccessibleForFree["']\s*:\s*(?:false|["']false["'])/i, 'schema-not-free'],
+  [/hasPaywallAccess["']?\s*:\s*false|trackPaywallShown|paywall(?:_|-)?shown/i, 'paywall-state'],
+  [/data-zephr|zephr-sdk|tinypass\.com|tp\.push\(|piano\.io|data-piano|poool\.|laterpay|evolok|pelcro|leaky-paywall|data-paywall|class=["'][^"']*(?:paywall|regwall|meter-wall|metered-wall|InContentBarrier)/i, 'paywall-vendor'],
+];
+/** Signals from the raw page that the publisher gates this article. */
+export function accessSignals(html) {
+  const source = String(html ?? '');
+  const signals = PAYWALL_MARKERS.filter(([pattern]) => pattern.test(source)).map(([, name]) => name);
+  const tier = /property=["']article:content_tier["'][^>]*content=["']([a-z]+)["']/i.exec(source)?.[1]?.toLowerCase() || null;
+  return { tier, signals, gated: signals.length > 0 };
 }
 
 export function extractArticle(html, url, retrievedDate = null) {
@@ -568,5 +589,5 @@ export function extractArticle(html, url, retrievedDate = null) {
     retrieved: retrievedDate,
     text: contentRoot.textContent,
   });
-  return { metadata, content: contentRoot.innerHTML };
+  return { metadata, content: contentRoot.innerHTML, access: accessSignals(html) };
 }

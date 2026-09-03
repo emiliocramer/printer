@@ -12,10 +12,10 @@ npx playwright install chromium
 npm run print -- https://example.com/article
 ```
 
-Or, after linking the package:
+Or install the `printer` command into `~/.local/bin` (works regardless of which Node toolchain your shell activates):
 
 ```bash
-npm link
+npm run install-cli
 printer print https://example.com/article
 ```
 
@@ -41,6 +41,17 @@ Options:
 
 - `--no-preview` skips opening the rendered document in your browser.
 - `--keep-source` keeps the intermediate `index.html`, `styles.css`, and `assets/` next to the PDF for debugging. By default they are removed so the output directory contains PDFs only.
+- `--client` captures in a visible browser with a persistent profile (`~/Library/Application Support/printer/browser-profile`). Sign in to a publisher there once and later runs reuse the session.
+
+## Share links and paywalls
+
+Apple News, Google News, and shortener links are resolved to the publisher's URL before anything is captured, so the PDF is named after and built from the real article:
+
+```text
+Resolved https://apple.news/AO2h... -> https://www.theatlantic.com/ideas/2026/09/...
+```
+
+The tool refuses to print previews. If the publisher serves a truncated article and marks it as gated (`article:content_tier`, schema.org `isAccessibleForFree`, paywall vendor markup, or subscriber-wall copy), no PDF is written and the message explains what happened. Sign in with your subscription via `--client`; the browser stays open and the tool re-captures after you press Enter. Apple News+ access does not carry over to publisher sites.
 
 For sites that require an interactive browser challenge, omit `--no-preview` or use the client-capture path when prompted:
 
@@ -79,6 +90,7 @@ printer print https://example.com/article
 1. Before the PDF is written, the print browser waits for every image and removes any that did not load, along with blocks left empty.
 2. After the PDF is written, it is read back with pdf.js. Blank pages, pages carrying only graphics, and dropped images are reported as warnings.
 3. If a site answers headless Chromium with an empty shell, the capture is retried once and then falls back to the interactive client browser.
+4. Interstitials, stubs under 60 words, and gated previews are rejected rather than written to disk.
 
 ## Development
 

@@ -246,6 +246,7 @@ test('runPrint captures, extracts, previews, and writes normalized HTML and PDF'
     outputDir,
     browser,
     retrievedDate: '2026-08-31',
+    minimumWords: 0,
   });
 
   assert.equal(result.paths.slug, 'example-com-story');
@@ -280,7 +281,7 @@ test('runPrint suppresses preview opening with noPreview and always closes the s
     async open() { calls.push('open'); },
   };
 
-  await runPrint('https://example.com/quiet', { outputDir, browser, noPreview: true });
+  await runPrint('https://example.com/quiet', { outputDir, browser, noPreview: true, minimumWords: 0 });
   assert.deepEqual(calls, ['capture', 'serve', 'pdf', 'close']);
 });
 
@@ -310,13 +311,14 @@ test('runPrint falls back to client capture after an access challenge', async ()
     async startPreview() { calls.push('serve'); return { url: 'http://127.0.0.1:40001/', async close() { calls.push('close'); } }; },
     async pdf(_url, outputPath) { calls.push('pdf'); const { writeFile } = await import('node:fs/promises'); await writeFile(outputPath, '%PDF-fake'); },
   };
-  await runPrint('https://example.com/challenged', { outputDir, browser, noPreview: true });
+  await runPrint('https://example.com/challenged', { outputDir, browser, noPreview: true, minimumWords: 0 });
   assert.deepEqual(calls, ['headless', ['client', 'https://example.com/challenged'], 'serve', 'pdf', 'close']);
 });
 
 test('parseArgs accepts --keep-source and rejects unknown options', async () => {
   const { parseArgs } = await import('../src/cli.js');
-  assert.deepEqual(parseArgs(['print', 'https://example.test/a', '--keep-source']), { url: 'https://example.test/a', noPreview: false, keepSource: true });
+  assert.deepEqual(parseArgs(['print', 'https://example.test/a', '--keep-source']), { url: 'https://example.test/a', noPreview: false, keepSource: true, client: false });
+  assert.equal(parseArgs(['print', 'https://example.test/a', '--client']).client, true);
   assert.throws(() => parseArgs(['print', 'https://example.test/a', '--bogus']), /Unknown option --bogus/);
 });
 
@@ -361,4 +363,29 @@ test('inspectPdf reads back page structure from a generated PDF', async () => {
   assert.equal(report.pageCount, 3);
   assert.deepEqual(report.blankPages, [2]);
   assert.match(report.warnings[0], /page 2 appears blank/);
+});
+
+test('captureClientPage asks the reader to sign in and captures again when the review objects', async () => {
+  let loads = 0;
+  const prompts = [];
+  const page = {
+    async goto() { loads += 1; },
+    async reload() { loads += 1; },
+    async waitForTimeout() {},
+    async content() { return loads < 2 ? '<html><body><p>Preview only</p></body></html>' : '<html><body><article><p>Full article after sign-in</p></article></body></html>'; },
+    url() { return 'https://pub.example/story'; },
+    async title() { return 'Story'; },
+    async evaluate() { return []; },
+  };
+  const context = { pages() { return [page]; }, async close() {} };
+  const result = await captureClientPage('https://pub.example/story', {
+    playwright: { chromium: { async launchPersistentContext() { return context; } } },
+    prompt: async (message) => { prompts.push(message); return ''; },
+    review: async (captured) => (/Preview only/.test(captured.html) ? 'Only a preview was served.' : null),
+  });
+  assert.match(result.html, /Full article after sign-in/);
+  assert.equal(loads, 2);
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0], /Only a preview was served/);
+  assert.match(prompts[0], /Sign in/);
 });

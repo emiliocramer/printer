@@ -6,7 +6,8 @@
   "scripts": {
     "test": "node --test",
     "print": "node src/cli.js print",
-    "smoke": "node src/cli.js print"
+    "smoke": "node src/cli.js print",
+    "install-cli": "node scripts/install-cli.mjs"
   },
   "bin": {
     "printer": "src/cli.js"

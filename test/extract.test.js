@@ -185,6 +185,42 @@ test('leaves site furniture after the article out even when it is large', () => 
   assert.equal(root.querySelector('img'), null);
 });
 
+test('ignores captioned teaser figures that live in other article elements', () => {
+  const prose = 'The essay makes its argument across several careful paragraphs. '.repeat(10);
+  const html = `<main><article><h1>Essay</h1><p>${prose}</p></article>
+    <section><h2>Explore More Topics</h2><ul>
+      <li><article><a href="/other-1"><figure><img src="https://cdn.example/t1.jpg" data-printer-box="291x194" alt=""><figcaption>Illustration by Someone</figcaption></figure></a></article></li>
+      <li><article><figure><img src="https://cdn.example/t2.jpg" data-printer-box="291x194" alt=""><figcaption>Photo by Someone Else</figcaption></figure></article></li>
+    </ul></section></main>`;
+  const { content } = extractArticle(html, SOURCE_URL);
+  const root = parseFragment(content);
+  assert.equal(root.querySelector('img'), null);
+  assert.doesNotMatch(content, /Explore More Topics|Illustration by/);
+});
+
+test('reports publisher access signals from the raw page', () => {
+  const gated = `<html><head><meta property="article:content_tier" content="metered"></head><body><main><article><h1>Gated</h1><p>${'Preview prose. '.repeat(40)}</p></article></main><script>window.__NEXT_DATA__={"hasPaywallAccess":false}</script></body></html>`;
+  const { access } = extractArticle(gated, SOURCE_URL);
+  assert.equal(access.gated, true);
+  assert.equal(access.tier, 'metered');
+  assert.ok(access.signals.includes('content-tier'));
+  assert.ok(access.signals.includes('paywall-state'));
+  const open = `<main><article><h1>Open</h1><p>${'Free prose. '.repeat(40)}</p></article></main>`;
+  assert.equal(extractArticle(open, SOURCE_URL).access.gated, false);
+});
+
+test('keeps Substack-style newsletter posts whose container classes mention newsletters', () => {
+  const prose = 'A newsletter essay that must survive chrome removal intact. '.repeat(30);
+  const html = `<html><body><div class="typography newsletter-post post"><article><h1>Newsletter essay</h1>
+    <div class="body markup"><p>${prose}</p><figure><img src="https://cdn.example/hero.png" alt="" data-printer-box="720x400" data-printer-asset="hero.png"></figure><p>${prose}</p></div>
+  </article></div><div class="subscribe-widget"><p>Subscribe now</p></div></body></html>`;
+  const { content } = extractArticle(html, 'https://writer.substack.com/p/essay');
+  const root = parseFragment(content);
+  assert.match(root.textContent, /must survive chrome removal/);
+  assert.ok(root.querySelector('img[src="./assets/hero.png"]'));
+  assert.doesNotMatch(content, /Subscribe now/);
+});
+
 test('replaces known media embeds with a printed reference and removes unknown frames', () => {
   const html = `<main><article><h1>Embeds</h1><p>${'Prose introducing an embedded talk. '.repeat(30)}</p>
     <iframe src="https://www.youtube.com/embed/abc123" title="Conference talk"></iframe>

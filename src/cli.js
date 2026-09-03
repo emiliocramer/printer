@@ -7,6 +7,29 @@ import { fileURLToPath } from 'node:url';
 import { extractArticle } from './extract.js';
 import { renderDocument } from './render.js';
 import { captureRenderedPage, captureClientPage, startPreviewServer, printPdf, openPreview, inspectPdf } from './browser.js';
+import { resolveArticleUrl } from './resolve.js';
+
+const MIN_ARTICLE_WORDS = 60;
+const PAYWALL_COPY = /exclusive to subscribers|subscribers? only|already a subscriber|to continue reading|continue reading (?:this|the) (?:article|story)|start your free trial|start free trial|subscribe to (?:read|continue|unlock)|sign in to (?:read|continue)|log in to (?:read|continue)|this (?:article|story) is for subscribers|unlock this (?:article|story)|create a free account to (?:read|continue)|remaining free articles|you(?:'|’)ve reached your (?:free )?(?:article )?limit/i;
+const INTERSTITIAL_COPY = /opening story|tap here if the story doesn(?:'|’)t open|redirecting you|you are being redirected|please wait while we redirect/i;
+
+function wordCount(html) {
+  return String(html ?? '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean).length;
+}
+/** Explain why an extraction is not printable, or return null when it is. */
+export function assessArticle(article, { minimumWords = MIN_ARTICLE_WORDS } = {}) {
+  const text = String(article?.content ?? '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim();
+  const words = text ? text.split(' ').length : 0;
+  if (!words || article?.metadata?.title === 'Untitled article') return { reason: 'empty', message: 'The page loaded without readable article content.' };
+  if (INTERSTITIAL_COPY.test(text) && words < 200) return { reason: 'interstitial', message: 'The page is a redirect interstitial, not an article.' };
+  const gated = Boolean(article?.access?.gated) || PAYWALL_COPY.test(text);
+  if (gated && words < 900) {
+    const tier = article?.access?.tier ? ` (${article.access.tier})` : '';
+    return { reason: 'paywall', message: `Only a ${words}-word preview was served; the publisher marks this article as gated${tier}. Run again with --client to sign in with your subscription in a browser window, then the full article will print.` };
+  }
+  if (words < minimumWords) return { reason: 'short', message: `Only ${words} words of article text were found, which is not enough to print.` };
+  return null;
+}
 
 export class CliError extends Error {}
 
@@ -41,14 +64,17 @@ function captureUrl(input) {
 }
 
 export async function runPrint(input, options = {}) {
-  const url = captureUrl(validateUrl(input).href);
+  const requested = validateUrl(input).href;
+  const resolved = options.resolve === false ? { url: requested, hops: [] } : await (options.resolve ?? resolveArticleUrl)(requested);
+  const url = captureUrl(validateUrl(resolved.url).href);
   const paths = resolveOutputPaths(url, options);
   const browser = options.browser ?? { capture: captureRenderedPage, captureClient: captureClientPage, startPreview: startPreviewServer, pdf: printPdf, open: openPreview, inspect: inspectPdf };
   await mkdir(paths.assetsDir, { recursive: true });
   let preview;
   try {
     const extract = options.extract ?? extractArticle;
-    const readable = (article) => Boolean(String(article?.content ?? '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()) && article?.metadata?.title !== 'Untitled article';
+    const assess = (article) => assessArticle(article, { minimumWords: options.minimumWords });
+    const readable = (article) => assess(article) === null;
     const attempt = async (capture) => {
       const captured = await capture();
       const article = await extract(captured.html, captured.finalUrl ?? url, options.retrievedDate);
@@ -58,18 +84,32 @@ export async function runPrint(input, options = {}) {
     // shell instead of an error, so an empty extraction gets the same second
     // chance as a hard failure before we give up.
     const headless = () => browser.capture(url, { assetsDir: paths.assetsDir, playwright: options.playwright });
-    const client = typeof browser.captureClient === 'function' ? () => browser.captureClient(url, { assetsDir: paths.assetsDir, playwright: options.playwright }) : null;
+    const review = async (captured) => {
+      const problem = assess(await extract(captured.html, captured.finalUrl ?? url, options.retrievedDate));
+      return problem?.reason === 'paywall' || problem?.reason === 'short' ? problem.message.replace(/ Run again with --client[^.]*\./, '') : null;
+    };
+    const client = typeof browser.captureClient === 'function' ? () => browser.captureClient(url, { assetsDir: paths.assetsDir, playwright: options.playwright, prompt: options.prompt, review }) : null;
     let result;
-    try {
-      result = await attempt(headless);
-      if (!readable(result.article)) result = await attempt(headless);
-      if (!readable(result.article) && client) result = await attempt(client);
-    } catch (error) {
-      if (error?.code !== 'PAGE_INACCESSIBLE' || !client) throw error;
+    if (options.client) {
+      if (!client) throw new CliError('Interactive client capture is unavailable.');
       result = await attempt(client);
+    } else {
+      try {
+        result = await attempt(headless);
+        // Paywalled previews will not improve by retrying headless.
+        if (!readable(result.article) && assess(result.article)?.reason !== 'paywall') result = await attempt(headless);
+        if (!readable(result.article) && assess(result.article)?.reason !== 'paywall' && client) result = await attempt(client);
+      } catch (error) {
+        if (error?.code !== 'PAGE_INACCESSIBLE' || !client) throw error;
+        result = await attempt(client);
+      }
     }
     const { article } = result;
-    if (!readable(article)) throw new CliError('The page loaded without readable article content.');
+    const problem = assess(article);
+    if (problem) {
+      const message = options.client ? problem.message.replace(/ Run again with --client[^.]*\./, ' The publisher still served only a preview after sign-in; this account may not have access to the full article.') : problem.message;
+      throw Object.assign(new CliError(message), { code: problem.reason.toUpperCase() });
+    }
     const html = options.render ? options.render(article) : renderDocument(article);
     await writeFile(paths.htmlPath, html);
     const styles = await readFile(new URL('./styles.css', import.meta.url));
@@ -79,7 +119,7 @@ export async function runPrint(input, options = {}) {
     const inspection = typeof browser.inspect === 'function' ? await browser.inspect(paths.pdfPath).catch(() => null) : null;
     const report = summarizeRun(article, audit, inspection);
     if (!options.noPreview) await browser.open(preview.url);
-    return { paths, previewUrl: preview.url, report };
+    return { paths, previewUrl: preview.url, report: { ...report, resolvedFrom: resolved.hops.length ? requested : null, url } };
   } catch (error) {
     if (error?.code === 'BROWSER_MISSING') {
       throw Object.assign(new CliError('Chromium is unavailable. Run `npx playwright install chromium` and try again.'), { code: 'BROWSER_MISSING', cause: error });
@@ -107,17 +147,18 @@ export function summarizeRun(article, audit = {}, inspection = null) {
   return { pages: inspection?.pageCount ?? null, words, figures, blankPages: inspection?.blankPages ?? [], warnings };
 }
 
-const USAGE = 'Usage: printer print <URL> [--no-preview] [--keep-source]';
+const USAGE = 'Usage: printer print <URL> [--no-preview] [--keep-source] [--client]';
 export function parseArgs(argv = process.argv.slice(2)) {
   const args = [...argv];
   if (args.shift() !== 'print') throw new CliError(USAGE);
-  const unknown = args.find((arg) => arg.startsWith('--') && !['--no-preview', '--keep-source'].includes(arg));
+  const unknown = args.find((arg) => arg.startsWith('--') && !['--no-preview', '--keep-source', '--client'].includes(arg));
   if (unknown) throw new CliError(`Unknown option ${unknown}. ${USAGE}`);
   const noPreview = args.includes('--no-preview');
   const keepSource = args.includes('--keep-source');
+  const client = args.includes('--client');
   const url = args.find((arg) => !arg.startsWith('--'));
   if (!url) throw new CliError(USAGE);
-  return { url, noPreview, keepSource };
+  return { url, noPreview, keepSource, client };
 }
 
 function describeReport(report) {
@@ -133,6 +174,7 @@ export async function main(argv = process.argv.slice(2), { runPrint: execute = r
   try {
     const args = parseArgs(argv);
     const result = await execute(args.url, { ...args, keepSource: Boolean(args.keepSource) });
+    if (result.report?.resolvedFrom) log(`Resolved ${result.report.resolvedFrom} -> ${result.report.url}`);
     log(`Wrote ${result.paths.pdfPath}${describeReport(result.report)}`);
     for (const warning of result.report?.warnings ?? []) error(`printer: warning: ${warning}`);
     if (args.keepSource) log(`Kept source files in ${result.paths.documentDir}`);

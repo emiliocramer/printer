@@ -80,7 +80,18 @@ export async function captureRenderedPage(url, { assetsDir, playwright, stabilit
     } finally { await browser.close(); }
   } catch (error) { throw browserError(error); }
 }
-export async function captureClientPage(url, { assetsDir, playwright, profileDir = path.join(process.env.HOME || '.', 'Library', 'Application Support', 'printer', 'browser-profile') } = {}) {
+async function askUser(message, prompt) {
+  if (prompt) return prompt(message);
+  const readline = createInterface({ input: process.stdin, output: process.stdout });
+  try { return await readline.question(message); } finally { readline.close(); }
+}
+
+/**
+ * Visible browser with a persistent profile. Used for access challenges and
+ * for signing in to publishers; `review` lets the caller inspect a capture
+ * and ask for another pass (for example after the reader logs in).
+ */
+export async function captureClientPage(url, { assetsDir, playwright, prompt, review, maxAttempts = 3, profileDir = path.join(process.env.HOME || '.', 'Library', 'Application Support', 'printer', 'browser-profile') } = {}) {
   let chromium;
   try {
     ({ chromium } = playwright ?? await import('playwright'));
@@ -94,15 +105,22 @@ export async function captureClientPage(url, { assetsDir, playwright, profileDir
         try {
           html = await waitForReadablePage(page, { timeoutMs: 8000 });
         } catch {
-          const readline = createInterface({ input: process.stdin, output: process.stdout });
-          try { await readline.question('Complete the browser verification, then press Enter here to continue. '); } finally { readline.close(); }
+          await askUser('Complete the browser verification, then press Enter here to continue. ', prompt);
           html = await waitForReadablePage(page);
         }
       } else {
         html = await waitForReadablePage(page);
       }
-      const finalUrl = await page.url();
-      return { html: await prepareVisuals(page, html, assetsDir), finalUrl, title: await page.title() };
+      for (let attempt = 1; ; attempt += 1) {
+        const finalUrl = await page.url();
+        const captured = { html: await prepareVisuals(page, html, assetsDir), finalUrl, title: await page.title() };
+        const objection = review ? await review(captured) : null;
+        if (!objection || attempt >= maxAttempts) return captured;
+        await askUser(`${objection}\nSign in or dismiss the barrier in the browser window, then press Enter here to capture again. `, prompt);
+        await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
+        await page.waitForTimeout(500);
+        html = await waitForReadablePage(page);
+      }
     } finally { await context.close(); }
   } catch (error) { throw browserError(error); }
 }
