@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
-import { extractArticle } from '../src/extract.js';
+import { extractArticle, parseSrcset } from '../src/extract.js';
 
 const SOURCE_URL = 'https://example.com/news/2026/story/index.html?ref=home';
 
@@ -81,10 +81,14 @@ test('preserves semantic article and native visual content', () => {
     'h2', 'p', 'a', 'blockquote', 'ul > li', 'pre > code',
     'table caption', 'table thead th', 'figure picture source',
     'figure img', 'figcaption', 'svg title', 'svg image',
-    'video source', 'iframe[title="Interactive chart"]',
+    'img[alt="Video poster frame"]', '.embed-note',
   ]) {
     assert.ok(root.querySelector(selector), `expected preserved ${selector}`);
   }
+  // Paper cannot play media: players become poster frames plus a printed address.
+  assert.equal(root.querySelector('video, iframe, embed, object'), null);
+  assert.match(root.querySelector('.embed-note').textContent, /Video/);
+  assert.match(root.querySelector('.embed-note').textContent, /https:\/\/example\.com\/news\/media\/explanation\.mp4/);
 
   assert.equal(root.querySelector('blockquote').textContent.trim(), 'A preserved quotation.');
   assert.equal(root.querySelector('figcaption').textContent, 'Results over time');
@@ -102,8 +106,98 @@ test('normalizes safe article, image, media, and SVG URLs', () => {
   assert.equal(root.querySelector('picture source').getAttribute('srcset'), 'https://example.com/news/media/chart-small.png 1x, https://example.com/media/chart-large.png 2x');
   assert.equal(root.querySelector('svg a').getAttribute('href'), 'https://example.com/news/2026/details');
   assert.equal(root.querySelector('svg image').getAttribute('href'), 'https://example.com/news/media/diagram.png');
-  assert.equal(root.querySelector('video').getAttribute('poster'), 'https://example.com/news/media/poster.jpg');
-  assert.equal(root.querySelector('video source').getAttribute('src'), 'https://example.com/news/media/explanation.mp4');
+  assert.equal(root.querySelector('img[alt="Video poster frame"]').getAttribute('src'), 'https://example.com/news/media/poster.jpg');
+});
+
+test('parses srcset candidates whose URLs contain commas', () => {
+  const value = 'https://cdn.example/fetch/$s!,w_424,c_limit,f_auto/https%3A%2F%2Fa.png 424w, https://cdn.example/fetch/$s!,w_848,c_limit/https%3A%2F%2Fa.png 848w,https://cdn.example/plain.png';
+  assert.deepEqual(parseSrcset(value), [
+    { url: 'https://cdn.example/fetch/$s!,w_424,c_limit,f_auto/https%3A%2F%2Fa.png', descriptor: '424w' },
+    { url: 'https://cdn.example/fetch/$s!,w_848,c_limit/https%3A%2F%2Fa.png', descriptor: '848w' },
+    { url: 'https://cdn.example/plain.png', descriptor: '' },
+  ]);
+  const html = `<main><article><h1>Comma srcset</h1><p>${'Readable prose about the image. '.repeat(30)}</p>
+    <img src="https://cdn.example/a.png" srcset="https://cdn.example/fetch/$s!,w_424,c_limit/a.png 424w, https://cdn.example/fetch/$s!,w_848,c_limit/a.png 848w" width="800" height="500" alt="Comma chart"></article></main>`;
+  const { content } = extractArticle(html, SOURCE_URL);
+  assert.equal(parseFragment(content).querySelector('img').getAttribute('srcset'), 'https://cdn.example/fetch/$s!,w_424,c_limit/a.png 424w, https://cdn.example/fetch/$s!,w_848,c_limit/a.png 848w');
+});
+
+test('uses the captured local asset and drops responsive alternatives that could break it', () => {
+  const html = `<main><article><h1>Local asset</h1><p>${'Prose that accompanies the captured figure. '.repeat(30)}</p>
+    <figure><picture><source type="image/webp" srcset="https://cdn.example/a.webp 1x"><img src="https://cdn.example/a.png" srcset="https://cdn.example/a.png 1x, https://cdn.example/a@2x.png 2x" sizes="100vw" data-printer-asset="a.png" data-printer-box="720x400" alt="Captured"></picture><figcaption>Captured figure</figcaption></figure>
+  </article></main>`;
+  const { content } = extractArticle(html, SOURCE_URL);
+  const root = parseFragment(content);
+  const img = root.querySelector('figure img');
+  assert.equal(img.getAttribute('src'), './assets/a.png');
+  assert.equal(img.getAttribute('srcset'), null);
+  assert.equal(img.getAttribute('sizes'), null);
+  assert.equal(root.querySelector('picture, source'), null);
+  assert.equal(root.querySelector('[data-printer-asset], [data-printer-box]'), null, 'capture annotations must not leak into output');
+});
+
+test('drops measured interface icons and logos but keeps measured article graphics', () => {
+  const html = `<main><article><h1>Measured visuals</h1><p>${'Report prose that references the figures below. '.repeat(30)}</p>
+    <p>Inline <img src="https://cdn.example/link.png" alt="" data-printer-box="16x16" data-printer-natural="16x16"> icon text.</p>
+    <svg viewBox="2 -0.5 11 18" width="10" fill="none" data-printer-box="10x16"><path d="M1 1L9 9"></path></svg>
+    <svg viewBox="0 0 400 300" data-printer-box="640x480"><path d="M0 300L400 0"></path></svg>
+    <img src="https://cdn.example/site-logo.svg" alt="Site logo" data-printer-box="120x34">
+    <img src="https://cdn.example/results.png" alt="Results" data-printer-box="640x360" data-printer-natural="1280x720">
+  </article></main>`;
+  const { content } = extractArticle(html, SOURCE_URL);
+  const root = parseFragment(content);
+  assert.equal(root.querySelector('img[src*="link.png"]'), null);
+  assert.equal(root.querySelector('img[alt="Site logo"]'), null);
+  assert.equal(root.querySelectorAll('svg').length, 1);
+  assert.ok(root.querySelector('svg[viewBox="0 0 400 300"]'));
+  assert.ok(root.querySelector('img[alt="Results"]'));
+  assert.match(root.textContent, /Inline\s+icon text/);
+});
+
+test('places recovered visuals next to their surrounding prose instead of at the end', () => {
+  const before = 'The first section establishes the baseline measurements in detail. '.repeat(8);
+  const after = 'The second section interprets what those measurements imply. '.repeat(8);
+  const html = `<main><article><h1>Placement</h1>
+    <p>${before}</p>
+    <div class="extra"><img src="https://cdn.example/between.png" alt="Between" data-printer-box="600x400" data-printer-asset="between.png"></div>
+    <p>${after}</p>
+    <p>${'Closing remarks summarize the findings. '.repeat(8)}</p>
+  </article></main>`;
+  const { content } = extractArticle(html, SOURCE_URL);
+  const root = parseFragment(content);
+  const container = root.querySelector('img').parentElement.closest('article, div');
+  const children = [...container.children].filter((child) => child.textContent.trim() || child.matches('img') || child.querySelector('img'));
+  const imageIndex = children.findIndex((child) => child.matches('img') || child.querySelector('img'));
+  assert.ok(imageIndex > 0, 'image should not be first');
+  assert.ok(imageIndex < children.length - 1, 'image should not be dumped at the end');
+  assert.match(children[imageIndex - 1].textContent, /baseline measurements/);
+  assert.match(children[imageIndex + 1].textContent, /interprets what those measurements/);
+});
+
+test('leaves site furniture after the article out even when it is large', () => {
+  const prose = 'The article body discusses the investigation at length and in detail. '.repeat(10);
+  const html = `<main><article><h1>Furniture</h1><p>${prose}</p><ol><li>${'A footnote with enough text to anchor a visual. '.repeat(3)}</li></ol></article>
+    <div class="featured-research-section"><div class="featured-research-card"><img src="https://cdn.example/teaser-1.png" alt="Other research" data-printer-box="226x134"></div></div>
+    <div class="more"><img src="https://cdn.example/trailing.png" alt="Trailing" data-printer-box="640x360"></div>
+  </main>`;
+  const { content } = extractArticle(html, SOURCE_URL);
+  const root = parseFragment(content);
+  assert.equal(root.querySelector('img'), null);
+});
+
+test('replaces known media embeds with a printed reference and removes unknown frames', () => {
+  const html = `<main><article><h1>Embeds</h1><p>${'Prose introducing an embedded talk. '.repeat(30)}</p>
+    <iframe src="https://www.youtube.com/embed/abc123" title="Conference talk"></iframe>
+    <iframe src="https://ads.example/frame" title="Sponsored"></iframe>
+  </article></main>`;
+  const { content } = extractArticle(html, SOURCE_URL);
+  const root = parseFragment(content);
+  assert.equal(root.querySelector('iframe'), null);
+  const notes = [...root.querySelectorAll('.embed-note')];
+  assert.equal(notes.length, 1);
+  assert.match(notes[0].textContent, /Video: Conference talk/);
+  assert.match(notes[0].textContent, /youtube\.com\/embed\/abc123/);
+  assert.doesNotMatch(content, /ads\.example/);
 });
 
 test('removes navigation, executable markup, forms, ads, comments, and tracking attributes', () => {

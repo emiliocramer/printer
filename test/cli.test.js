@@ -313,3 +313,52 @@ test('runPrint falls back to client capture after an access challenge', async ()
   await runPrint('https://example.com/challenged', { outputDir, browser, noPreview: true });
   assert.deepEqual(calls, ['headless', ['client', 'https://example.com/challenged'], 'serve', 'pdf', 'close']);
 });
+
+test('parseArgs accepts --keep-source and rejects unknown options', async () => {
+  const { parseArgs } = await import('../src/cli.js');
+  assert.deepEqual(parseArgs(['print', 'https://example.test/a', '--keep-source']), { url: 'https://example.test/a', noPreview: false, keepSource: true });
+  assert.throws(() => parseArgs(['print', 'https://example.test/a', '--bogus']), /Unknown option --bogus/);
+});
+
+test('summarizeRun reports page count, figures, and reader-visible warnings', async () => {
+  const { summarizeRun } = await import('../src/cli.js');
+  const article = { content: `<p>${'word '.repeat(400)}</p>` };
+  const audit = { images: 3, removedBrokenImages: 1 };
+  const inspection = { pageCount: 5, blankPages: [2], warnings: ['page 2 appears blank'], pages: [
+    { number: 1, characters: 60, images: 0, blank: false }, { number: 2, characters: 0, images: 0, blank: true },
+    { number: 3, characters: 2000, images: 1, blank: false }, { number: 4, characters: 4, images: 2, blank: false }, { number: 5, characters: 900, images: 0, blank: false },
+  ] };
+  const report = summarizeRun(article, audit, inspection);
+  assert.equal(report.pages, 5);
+  assert.equal(report.words, 400);
+  assert.equal(report.figures, 3);
+  assert.deepEqual(report.blankPages, [2]);
+  assert.match(report.warnings.join('\n'), /page 2 appears blank/);
+  assert.match(report.warnings.join('\n'), /1 image could not be loaded/);
+  assert.match(report.warnings.join('\n'), /page 4 contains only graphics/);
+});
+
+test('preview server serves image types Chromium will actually paint', async () => {
+  const { contentTypeFor } = await import('../src/browser.js');
+  assert.equal(contentTypeFor('/tmp/assets/chart.svg'), 'image/svg+xml');
+  assert.equal(contentTypeFor('/tmp/assets/photo.JPG'), 'image/jpeg');
+  assert.equal(contentTypeFor('/tmp/index.html'), 'text/html; charset=utf-8');
+  assert.equal(contentTypeFor('/tmp/assets/blob'), 'application/octet-stream');
+});
+
+test('inspectPdf reads back page structure from a generated PDF', async () => {
+  const { inspectPdf } = await import('../src/browser.js');
+  const directory = await temporaryOutput();
+  const { chromium } = await import('playwright');
+  const browser = await chromium.launch();
+  const pdfPath = path.join(directory, 'sample.pdf');
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<style>@page{size:Letter;margin:1in}section{break-after:page}</style><section><p>First page has prose that should register as text.</p></section><section></section><section><p>Third page carries a normal paragraph of prose.</p></section>');
+    await page.pdf({ path: pdfPath, format: 'Letter' });
+  } finally { await browser.close(); }
+  const report = await inspectPdf(pdfPath);
+  assert.equal(report.pageCount, 3);
+  assert.deepEqual(report.blankPages, [2]);
+  assert.match(report.warnings[0], /page 2 appears blank/);
+});
