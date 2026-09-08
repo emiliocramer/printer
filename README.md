@@ -43,6 +43,10 @@ Options:
 - `--keep-source` keeps the intermediate `index.html`, `styles.css`, and `assets/` next to the PDF for debugging. By default they are removed so the output directory contains PDFs only.
 - `--client` captures in a visible browser with a persistent profile (`~/Library/Application Support/printer/browser-profile`). Sign in to a publisher there once and later runs reuse the session.
 
+## Verified against
+
+The pipeline is exercised end to end against live pages from publishers with very different markup, all of which produce clean output (no blank pages, figures inline with captions, no site furniture): Nature, PNAS, eLife, arXiv (LaTeXML HTML; `/abs/` links resolve to the HTML full text), Quanta, Transformer Circuits (Distill), Anthropic Alignment Science, OpenAI, METR, Alignment Forum, Substack, and personal essay sites. Closed-access journal pages are refused rather than printed as an abstract plus references.
+
 ## Share links and paywalls
 
 Apple News, Google News, and shortener links are resolved to the publisher's URL before anything is captured, so the PDF is named after and built from the real article:
@@ -71,8 +75,9 @@ printer print https://example.com/article
 
 ## What it leaves out
 
-- Interface icons, logos, avatars, share buttons, and other decorative graphics. Every visual is measured as it rendered in the browser; anything icon-sized or named like site furniture is dropped.
-- Teasers, related-post cards, and other content that sits after the article body
+- Interface icons, logos, avatars, share buttons, banners, separators, and closing ornaments. Every visual is measured as it rendered in the browser; anything icon-sized, banner-shaped, or named like site furniture is dropped.
+- Teasers, related-post cards, "Also in…" lists, link farms, tag clouds, and journal front matter (submission history, volume/issue lines)
+- Sections that Readability drops but the article contains (abstracts, summaries) are recovered and put back in reading order
 - Images that fail to load. Nothing prints as a broken-image glyph.
 - Responsive `srcset`/`<picture>` alternatives once a local copy exists, so the print browser cannot pick a variant that does not resolve
 

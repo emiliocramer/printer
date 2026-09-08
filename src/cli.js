@@ -9,23 +9,33 @@ import { renderDocument } from './render.js';
 import { captureRenderedPage, captureClientPage, startPreviewServer, printPdf, openPreview, inspectPdf } from './browser.js';
 import { resolveArticleUrl } from './resolve.js';
 
-const MIN_ARTICLE_WORDS = 60;
-const PAYWALL_COPY = /exclusive to subscribers|subscribers? only|already a subscriber|to continue reading|continue reading (?:this|the) (?:article|story)|start your free trial|start free trial|subscribe to (?:read|continue|unlock)|sign in to (?:read|continue)|log in to (?:read|continue)|this (?:article|story) is for subscribers|unlock this (?:article|story)|create a free account to (?:read|continue)|remaining free articles|you(?:'|’)ve reached your (?:free )?(?:article )?limit/i;
+const MIN_ARTICLE_WORDS = 150;
+const PAYWALL_COPY = /access options|access (?:via|through) your institution|buy this article|subscribe to this journal|rent or buy|purchase access|get full access|institutional subscriptions|exclusive to subscribers|subscribers? only|already a subscriber|to continue reading|continue reading (?:this|the) (?:article|story)|start your free trial|start free trial|subscribe to (?:read|continue|unlock)|sign in to (?:read|continue)|log in to (?:read|continue)|this (?:article|story) is for subscribers|unlock this (?:article|story)|create a free account to (?:read|continue)|remaining free articles|you(?:'|’)ve reached your (?:free )?(?:article )?limit/i;
 const INTERSTITIAL_COPY = /opening story|tap here if the story doesn(?:'|’)t open|redirecting you|you are being redirected|please wait while we redirect/i;
 
 function wordCount(html) {
   return String(html ?? '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean).length;
 }
+const BACK_MATTER_HEADING = /^(?:references|bibliography|notes|footnotes|acknowledg|author information|author contributions|data availability|code availability|funding|ethics|competing interests|peer review|additional information|rights and permissions|about this article|supplementary|extended data|change history|related content|methods)/i;
+/** Words in the article's own prose, stopping at the first back-matter heading. */
+export function bodyWordCount(html) {
+  const source = String(html ?? '');
+  const cut = [...source.matchAll(/<h[1-4][^>]*>([\s\S]*?)<\/h[1-4]>/gi)].find((match) => BACK_MATTER_HEADING.test(match[1].replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()));
+  const body = cut ? source.slice(0, cut.index) : source;
+  const paragraphs = [...body.matchAll(/<(?:p|li|blockquote|td)[^>]*>([\s\S]*?)<\/(?:p|li|blockquote|td)>/gi)].map((match) => match[1].replace(/<[^>]*>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim()).filter(Boolean);
+  return paragraphs.join(' ').split(' ').filter(Boolean).length;
+}
 /** Explain why an extraction is not printable, or return null when it is. */
 export function assessArticle(article, { minimumWords = MIN_ARTICLE_WORDS } = {}) {
   const text = String(article?.content ?? '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim();
   const words = text ? text.split(' ').length : 0;
+  const bodyWords = bodyWordCount(article?.content);
   if (!words || article?.metadata?.title === 'Untitled article') return { reason: 'empty', message: 'The page loaded without readable article content.' };
   if (INTERSTITIAL_COPY.test(text) && words < 200) return { reason: 'interstitial', message: 'The page is a redirect interstitial, not an article.' };
   const gated = Boolean(article?.access?.gated) || PAYWALL_COPY.test(text);
-  if (gated && words < 900) {
+  if (gated && Math.min(words, bodyWords * 1.5 + 200) < 900) {
     const tier = article?.access?.tier ? ` (${article.access.tier})` : '';
-    return { reason: 'paywall', message: `Only a ${words}-word preview was served; the publisher marks this article as gated${tier}. Run again with --client to sign in with your subscription in a browser window, then the full article will print.` };
+    return { reason: 'paywall', message: `Only a ${bodyWords}-word preview was served; the publisher marks this article as gated${tier}. Run again with --client to sign in with your subscription in a browser window, then the full article will print.` };
   }
   if (words < minimumWords) return { reason: 'short', message: `Only ${words} words of article text were found, which is not enough to print.` };
   return null;
@@ -45,7 +55,7 @@ export function validateUrl(input) {
 
 export function slugForUrl(input) {
   const url = validateUrl(input);
-  const value = `${url.hostname}${url.port ? `-${url.port}` : ''}${url.pathname}${url.search}`.replace(/\.[a-z0-9]{1,8}$/i, '').replace(/%[0-9a-f]{2}/gi, ' ').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase();
+  const value = `${url.hostname}${url.port ? `-${url.port}` : ''}${url.pathname}${url.search}`.replace(/\.(?:html?|php|aspx?|jsp|shtml|cfm|pdf|xml|json|txt|md)$/i, '').replace(/%[0-9a-f]{2}/gi, ' ').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase();
   return value || 'article';
 }
 
@@ -88,7 +98,10 @@ export async function runPrint(input, options = {}) {
       const problem = assess(await extract(captured.html, captured.finalUrl ?? url, options.retrievedDate));
       return problem?.reason === 'paywall' || problem?.reason === 'short' ? problem.message.replace(/ Run again with --client[^.]*\./, '') : null;
     };
-    const client = typeof browser.captureClient === 'function' ? () => browser.captureClient(url, { assetsDir: paths.assetsDir, playwright: options.playwright, prompt: options.prompt, review }) : null;
+    // The interactive browser needs someone at the terminal to finish a
+    // challenge or sign in; in scripts and pipes fail fast instead of hanging.
+    const interactive = options.client || options.interactive || (options.interactive === undefined && Boolean(process.stdin.isTTY));
+    const client = interactive && typeof browser.captureClient === 'function' ? () => browser.captureClient(url, { assetsDir: paths.assetsDir, playwright: options.playwright, prompt: options.prompt, review }) : null;
     let result;
     if (options.client) {
       if (!client) throw new CliError('Interactive client capture is unavailable.');
@@ -100,7 +113,8 @@ export async function runPrint(input, options = {}) {
         if (!readable(result.article) && assess(result.article)?.reason !== 'paywall') result = await attempt(headless);
         if (!readable(result.article) && assess(result.article)?.reason !== 'paywall' && client) result = await attempt(client);
       } catch (error) {
-        if (error?.code !== 'PAGE_INACCESSIBLE' || !client) throw error;
+        if (error?.code !== 'PAGE_INACCESSIBLE') throw error;
+        if (!client) throw Object.assign(new CliError(`${error.message} The site requires a browser check; run again in a terminal (or with --client) to complete it.`), { code: 'PAGE_INACCESSIBLE', cause: error });
         result = await attempt(client);
       }
     }

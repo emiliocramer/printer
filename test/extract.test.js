@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
-import { extractArticle, parseSrcset } from '../src/extract.js';
+import { extractArticle, parseSrcset, stripSiteSuffix } from '../src/extract.js';
 
 const SOURCE_URL = 'https://example.com/news/2026/story/index.html?ref=home';
 
@@ -219,6 +219,90 @@ test('keeps Substack-style newsletter posts whose container classes mention news
   assert.match(root.textContent, /must survive chrome removal/);
   assert.ok(root.querySelector('img[src="./assets/hero.png"]'));
   assert.doesNotMatch(content, /Subscribe now/);
+});
+
+test('an author reading list inside the article survives while site recommendations after it are removed', () => {
+  const prose = 'The proof proceeds through modularity lifting and careful case analysis. '.repeat(12);
+  const html = `<main><article><h1>Formalizing a theorem</h1><div class="body">
+    <p>${prose}</p><h2>Method</h2><p>${prose}</p>
+    <h3>Recommended expository reading</h3><ul><li><a href="/a">A survey</a></li><li><a href="/b">Lecture notes</a></li></ul>
+    <h2>Acknowledgements</h2><p>${'Thanks to collaborators. '.repeat(10)}</p>
+  </div></article>
+  <section><h2>Related content</h2><article><p>${'Teaser text for another post. '.repeat(20)}</p></article></section></main>`;
+  const { content } = extractArticle(html, SOURCE_URL);
+  const text = content.replace(/<[^>]+>/g, ' ');
+  assert.match(text, /modularity lifting/);
+  assert.match(text, /Acknowledgements/);
+  assert.match(text, /Lecture notes/, 'the author\'s own reading list is content');
+  assert.doesNotMatch(text, /Related content|Teaser text for another post/);
+});
+
+test('page-level layout classes do not disqualify hidden-but-captioned article figures', () => {
+  const prose = 'The connectome analysis proceeds across cell types and circuits in detail. '.repeat(12);
+  const html = `<body><div id="content" class="c-article-main u-container eds-l-with-sidebar"><main><article>
+    <div class="c-article-body"><p>${prose}</p><p>${prose}</p>
+      <div class="u-display-none"><div class="c-article-section__figure" id="figure-1"><figure data-printer-box="0x0"><figcaption><b>Fig. 1: Circuit overview.</b></figcaption>
+        <picture><source srcset="https://media.example/fig1.png?as=webp"><img src="//media.example/fig1.png" alt="" data-printer-box="0x0" data-printer-natural="252x312" data-printer-asset="fig1.png"></picture></figure></div></div>
+    </div></article></main></div></body>`;
+  const { content } = extractArticle(html, 'https://journal.example/articles/1');
+  const root = parseFragment(content);
+  assert.equal(root.querySelectorAll('figure').length, 1);
+  assert.equal(root.querySelector('figure img').getAttribute('src'), './assets/fig1.png');
+  assert.match(root.querySelector('figcaption').textContent, /Fig\. 1/);
+});
+
+test('drops banners, separators, and closing spot illustrations but keeps captioned figures', () => {
+  const prose = 'Theoretical computer science does not need a machine to make progress. '.repeat(12);
+  const html = `<main><article><h1>Qualia</h1>
+    <img src="https://cdn.example/QUALIA-Banner-WITH-SPACER-1536x200.webp" alt="" data-printer-box="1536x200">
+    <figure><img src="https://cdn.example/lede-1536x864.webp" alt="" data-printer-box="720x405"><figcaption>Kristina Armitage/Quanta Magazine</figcaption></figure>
+    <p>${prose}</p>
+    <img src="https://cdn.example/QUALIA-Separator-2.webp" alt="" data-printer-box="1300x43">
+    <p>${prose}</p>
+    <img src="https://cdn.example/inline-diagram.png" alt="Diagram of a Turing machine" data-printer-box="600x400">
+    <p>${prose}</p>
+    <img src="https://cdn.example/Spot-05-1536x528.webp" alt="" data-printer-box="1536x528">
+  </article></main>`;
+  const { content } = extractArticle(html, SOURCE_URL);
+  const root = parseFragment(content);
+  const sources = [...root.querySelectorAll('img')].map((img) => img.getAttribute('src'));
+  assert.deepEqual(sources, ['https://cdn.example/lede-1536x864.webp', 'https://cdn.example/inline-diagram.png']);
+});
+
+test('converts image objects into images and reads scholarly citation metadata', () => {
+  const html = `<html><head><meta name="citation_author" content="Chupilkin, Maxim"><meta name="citation_author" content="Second, Author"><meta name="citation_publication_date" content="2026/09/04"></head>
+  <body><article class="ltx_document"><h1>Paper</h1><div class="ltx_authors"><span class="ltx_personname">Maxim Chupilkin</span></div>
+    <p>${'Findings are reported in the figures that follow. '.repeat(12)}</p>
+    <figure class="ltx_figure" data-printer-box="800x579"><object type="image/svg+xml" data="2609.05009v1/figure1.svg" width="448" height="294" data-printer-asset="figure1.svg"></object><figcaption>Figure 1: Mean willingness falls.</figcaption></figure>
+    <p>${'Aher et al. (2023) reported similar effects. '.repeat(12)}</p>
+  </article></body></html>`;
+  const { content, metadata } = extractArticle(html, 'https://arxiv.org/html/2609.05009');
+  const root = parseFragment(content);
+  assert.equal(root.querySelector('object'), null);
+  assert.equal(root.querySelector('figure img').getAttribute('src'), './assets/figure1.svg');
+  assert.equal(metadata.author, 'Chupilkin, Maxim, Second, Author');
+  assert.equal(metadata.published, '2026/09/04');
+});
+
+test('does not mistake byline headers or citations for the author', () => {
+  const html = `<body><d-title><h1>Update</h1></d-title><d-byline><div class="byline grid"><h3>Authors</h3><h3>Affiliations</h3><p>Published</p><p>Not published yet.</p></div></d-byline>
+    <div class="section-authors">Kevin Der, Harish Kamath; edited by Nick Turner</div>
+    <article><p>${'Sparse autoencoders trained on turn averages behave differently. '.repeat(15)}</p><p>Aher et al. (2023) also found this.</p></article></body>`;
+  const { metadata } = extractArticle(html, 'https://circuits.example/2026/update/');
+  assert.equal(metadata.author, 'Kevin Der, Harish Kamath');
+  const arxiv = extractArticle(`<article class="ltx_document"><h1>T</h1><span class="ltx_personname">Maxim Chupilkin</span><p>${'Prose. '.repeat(100)}</p></article>`, 'https://arxiv.org/html/2609.05009');
+  assert.equal(arxiv.metadata.author, 'Maxim Chupilkin');
+  assert.equal(arxiv.metadata.published, '2026-09');
+});
+
+test('keeps inline base64 raster images while still rejecting non-image data URLs', () => {
+  // Payload deliberately contains substrings ("hr", "logo", "bg") that must never be read as a file name.
+  const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==7hr9/logo+bg1';
+  const html = `<body><d-article><p>${'Inline figure prose follows. '.repeat(30)}</p><figure class="gdoc-image" data-printer-box="1000x358"><img src="${png}" data-printer-box="1000x358" data-printer-natural="1999x716"><figcaption>Turn-averaged SAE results</figcaption></figure><p>Evil <img src="data:text/html,evil" alt="x"></p></d-article></body>`;
+  const { content } = extractArticle(html, 'https://circuits.example/2026/update/');
+  const root = parseFragment(content);
+  assert.equal(root.querySelectorAll('img').length, 1);
+  assert.ok(root.querySelector('img').getAttribute('src').startsWith('data:image/png;base64,'));
 });
 
 test('replaces known media embeds with a printed reference and removes unknown frames', () => {
@@ -588,4 +672,59 @@ test('preserves equations and table semantics needed by printed reports', () => 
   assert.match(result.content, /<mi>x<\/mi>/);
   assert.match(result.content, /<th[^>]*scope="col"/);
   assert.match(result.content, /<td[^>]*rowspan="2"/);
+});
+
+test('strips publisher suffixes from titles without touching real subtitles', () => {
+  assert.equal(stripSiteSuffix('Connectome analysis of a cerebellum-like circuit - Nature', 'Nature', 'https://www.nature.com/articles/x'), 'Connectome analysis of a cerebellum-like circuit');
+  assert.equal(stripSiteSuffix('Inside Anduril | WIRED', 'WIRED', 'https://www.wired.com/story/x'), 'Inside Anduril');
+  assert.equal(stripSiteSuffix('Debate Training Reduces Reward Hacking in RLAIF — AI Alignment Forum', null, 'https://www.alignmentforum.org/posts/x'), 'Debate Training Reduces Reward Hacking in RLAIF');
+  assert.equal(stripSiteSuffix('Does Computer Science Need Computers? | Quanta Magazine', 'Quanta Magazine', 'https://www.quantamagazine.org/x'), 'Does Computer Science Need Computers?');
+  assert.equal(stripSiteSuffix('The Adolescence of Technology - A Personal Essay', null, 'https://darioamodei.com/essay/x'), 'The Adolescence of Technology - A Personal Essay');
+  assert.equal(stripSiteSuffix('Circuits Updates – June 2026', null, 'https://transformer-circuits.pub/2026/june-update/index.html'), 'Circuits Updates – June 2026');
+});
+
+test('recovers an abstract section that Readability drops and keeps it before the main text', () => {
+  const abstract = 'The unitarity of the mixing matrix is a cornerstone of the standard model and is tested here. '.repeat(8);
+  const main = 'Transition form factors are fundamental hadron properties describing dynamic behaviour. '.repeat(40);
+  const html = `<main><article>
+    <section data-title="Abstract"><h2>Abstract</h2><p>${abstract}</p></section>
+    <section data-title="Main"><h2>Main</h2><p>${main}</p><p>${main}</p><h3>Detail</h3><p>${main}</p></section>
+    <section data-title="Access options"><h2>Access options</h2><p>${'Buy this article or access through your institution. '.repeat(10)}</p></section>
+    <section><h2>References</h2><ol>${'<li>A reference with several words in it.</li>'.repeat(40)}</ol></section>
+  </article></main>`;
+  const { content } = extractArticle(html, 'https://journal.example/articles/2');
+  const text = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  assert.match(text, /Abstract/);
+  assert.ok(text.indexOf('unitarity of the mixing matrix') < text.indexOf('Transition form factors'), 'abstract precedes main text');
+  assert.doesNotMatch(text, /Access options|Buy this article/);
+});
+
+test('author names shed glued dates and banner-style images are dropped even with alt text', () => {
+  const html = `<main><article><h1>Essay</h1><p class="byline">Ben Brubaker August 28, 2026</p>
+    <img src="https://cdn.example/QUALIA-Banner-WITH-SPACER-1-1536x200.webp" alt="Qualia: Essays that go where curiosity leads" width="1720" height="223" data-printer-box="720x94">
+    <p>${'Essay prose that must remain. '.repeat(40)}</p></article></main>`;
+  const { content, metadata } = extractArticle(html, 'https://www.quantamagazine.org/essay-20260828/');
+  assert.equal(metadata.author, 'Ben Brubaker');
+  assert.equal(parseFragment(content).querySelector('img'), null);
+});
+
+test('journal front matter in the article header is not printed as prose', () => {
+  const html = `<main><article><header><div><p>Contributed by Ronald Fagin; received October 3, 2025; accepted July 9, 2026; reviewed by Ugo Vaccaro</p></div><div><p><span>August 27, 2026</span></p><p><span>123</span> (<span>35</span>) <span>e2525600123</span></p></div></header>
+    <section><h2>Significance</h2><p>${'The value of an information bit can range from consequential to unimportant. '.repeat(12)}</p></section>
+    <section><h2>Introduction</h2><p>${'Body prose. '.repeat(120)}</p></section></article></main>`;
+  const { content } = extractArticle(html, 'https://www.pnas.org/doi/10.1073/pnas.2525600123');
+  const text = content.replace(/<[^>]+>/g, ' ');
+  assert.doesNotMatch(text, /Contributed by|e2525600123|123\s*\(\s*35/);
+  assert.match(text, /Significance/);
+});
+
+test('section recovery ignores card lists such as "Also in Computer Science"', () => {
+  const cards = Array.from({ length: 3 }, (_, i) => `<article><a href="/story-${i}"><img src="https://cdn.example/card${i}.jpg" alt="" data-printer-box="520x292"><h3>Another story headline number ${i} that is fairly long</h3><p>Teaser sentence for the card that also runs long enough.</p></a></article>`).join('');
+  const html = `<main><article><h1>Essay</h1><p>${'Essay prose that must remain. '.repeat(40)}</p></article>
+    <section><h2>Also in Computer Science</h2>${cards}</section>
+    <section><h2>Elsewhere</h2><ul>${'<li><a href="/x">A link with quite a few words in it</a></li>'.repeat(12)}</ul></section></main>`;
+  const { content } = extractArticle(html, 'https://www.quantamagazine.org/essay-20260828/');
+  const text = content.replace(/<[^>]+>/g, ' ');
+  assert.doesNotMatch(text, /Also in Computer Science|Another story headline|Elsewhere/);
+  assert.equal(parseFragment(content).querySelector('img'), null);
 });

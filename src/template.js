@@ -14,6 +14,9 @@ function value(value, fallback = 'Not provided') {
 function displayDate(raw) {
   const text = String(raw ?? '').trim();
   if (!text) return 'Not provided';
+  const slashed = /^(\d{4})\/(\d{1,2})(?:\/(\d{1,2}))?$/.exec(text);
+  if (slashed) return displayDate(`${slashed[1]}-${slashed[2].padStart(2, '0')}${slashed[3] ? `-${slashed[3].padStart(2, '0')}` : ''}`);
+  if (/^\d{4}-\d{2}$/.test(text)) return new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${text}-01T00:00:00Z`));
   const date = new Date(text.length === 10 ? `${text}T00:00:00Z` : text);
   if (Number.isNaN(date.getTime())) return text;
   return new Intl.DateTimeFormat('en-US', {
@@ -43,8 +46,8 @@ export function provenancePage(metadata = {}) {
   return `<section class="provenance-page academic-title-page" data-page="provenance" aria-labelledby="provenance-title">
   <div class="cover-title-block">
     <h1 id="provenance-title" class="provenance-title">${escapeHtml(title)}</h1>
-    <p class="cover-author">${escapeHtml(value(metadata.author))}</p>
-    <p class="cover-date">${escapeHtml(displayDate(metadata.published))}</p>
+    ${metadata.author && metadata.author !== 'Unknown author' ? `<p class="cover-author">${escapeHtml(metadata.author)}</p>` : ''}
+    ${metadata.published ? `<p class="cover-date">${escapeHtml(displayDate(metadata.published))}</p>` : ''}
   </div>
 </section>`;
 }

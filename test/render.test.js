@@ -75,7 +75,7 @@ test('uses a centered academic title page without web-publishing chrome', () => 
   assert.match(css, /--paper:\s*#fff;/);
   assert.doesNotMatch(css, /#fffdf8/i);
   assert.match(css, /\.academic-title-page\s*\{[^}]*text-align:\s*center/s);
-  assert.match(css, /\.provenance-page h1\s*\{[^}]*font-size:\s*2em/s);
+  assert.match(css, /\.provenance-page h1\s*\{[^}]*font-size:\s*24pt/s);
 });
 
 test('preserves supplied article prose and asset URLs', () => {

@@ -28,10 +28,12 @@ const ATTRS = {
 };
 const URL_ATTRS = new Set(['href','src','poster','cite','data','xlink:href']);
 const CHROME_TOKENS = /(?:^|[-_\s])(subscribe|subscription|paywall|comment|comments|discussion|share|sharing|social|reaction|related|recommendation|recommendations|footer|legal|avatar|masthead|publication-header|main-menu|portable-archive|post-ufi|like-button|ready-for-more|channel-frame|session-attribution|visitedsurfacesiframe|post-label)(?:$|[-_\s])/i;
-const CHROME_HEADING = /^(subscribe|join|discussion|comments?|related posts?|recommended|recommendations|more from|you may also like|ready for more|explore more|most popular|most read|trending|up next|read next|further reading|about the author)\b/i;
+const RECOMMENDATION_HEADING = /^(?:also (?:in|on|from|by)|more (?:in|from)|other posts of interest|recommended(?! expository)|recommendations|more from|you may also like|explore more|more topics|most popular|most read|trending|related(?: stories| articles| posts| content| reading| research| coverage| links)?|read (?:more|next)|up next|latest(?: stories| articles| from| news)?|popular(?: stories| articles| posts)?|don(?:'|’)t miss|further reading|more (?:stories|articles|to read|on this)|keep reading|continue reading|in other news|see also|you might also like)\b/i;
+const CHROME_HEADING = /^(?:subscribe|join|discussion|comments?|ready for more|about the author|share this|sign up|newsletter|access options|access this article|buy this article|rights and permissions|about this article|cite this article)\b/i;
 const PRINTER_ATTRS = new Set(['data-printer-box','data-printer-natural','data-printer-src','data-printer-asset']);
 const SAFE_DATA_ATTRS = new Set(['data-footnote-ref','data-footnote-backref','data-src','data-srcset', ...PRINTER_ATTRS]);
 const DECORATIVE_NAME = /(?:^|[^a-z])(logo|logos|icon|icons|avatar|avatars|emoji|badge|spinner|loader|loading|placeholder|pixel|tracker|tracking|sprite|arrow|chevron|caret|bullet|divider|separator|accent|ornament|thumb|thumbnail|favicon|profile)(?:$|[^a-z])/i;
+const ORNAMENT_NAME = /(?:^|[^a-z])(banner|banners|divider|dividers|separator|separators|spacer|spacers|ornament|ornaments|flourish|rule|hr|border|frame|background|bg|texture|pattern|watermark)(?:$|[^a-z])/i;
 const SEMANTIC_NAME = /chart|graph|diagram|figure|plot|map|timeline|illustration|visual|infographic|screenshot|table/i;
 const MEDIA_HOSTS = /(?:^|\.)(youtube\.com|youtu\.be|youtube-nocookie\.com|vimeo\.com|spotify\.com|soundcloud\.com|twitter\.com|x\.com|loom\.com|wistia\.com|wistia\.net|streamable\.com|tiktok\.com|instagram\.com|codepen\.io|observablehq\.com|dwcdn\.net|flourish\.studio|substack\.com)$/i;
 const BLOCK_SELECTOR = 'p, h1, h2, h3, h4, h5, h6, li, blockquote, pre';
@@ -53,8 +55,14 @@ export function visualSize(element) {
   if (height > 0) return { width: height, height, known: true };
   return { width: 0, height: 0, known: false };
 }
+/** Only the file name of a URL carries naming signal; payloads and queries are noise. */
+function urlBasename(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw || /^data:/i.test(raw)) return '';
+  try { return decodeURIComponent(new URL(raw, 'https://placeholder.invalid/').pathname.split('/').pop() || ''); } catch { return raw.split(/[?#]/)[0].split('/').pop() || ''; }
+}
 function visualName(element) {
-  return `${element.getAttribute('alt') || ''} ${element.getAttribute('src') || ''} ${element.getAttribute('data-printer-src') || ''} ${element.getAttribute('class') || ''} ${element.getAttribute('id') || ''} ${element.getAttribute('aria-label') || ''}`;
+  return `${element.getAttribute('alt') || ''} ${urlBasename(element.getAttribute('src'))} ${urlBasename(element.getAttribute('data-printer-src'))} ${urlBasename(element.getAttribute('data-printer-asset'))} ${element.getAttribute('class') || ''} ${element.getAttribute('id') || ''} ${element.getAttribute('aria-label') || ''}`;
 }
 /**
  * Interface icons, logos, avatars and other visuals that carry no article
@@ -71,6 +79,12 @@ export function isDecorativeVisual(element, { lenient = false } = {}) {
   if (captioned) return false;
   const name = visualName(element);
   if (DECORATIVE_NAME.test(name) && (!size.known || largest <= 240)) return true;
+  // Page furniture: banners, rules, and spacers are wide, short, and unnamed.
+  const hasAlt = Boolean(element.getAttribute('alt')?.trim());
+  const fileName = `${urlBasename(element.getAttribute('src'))} ${urlBasename(element.getAttribute('data-printer-src'))} ${urlBasename(element.getAttribute('data-printer-asset'))}`;
+  if (ORNAMENT_NAME.test(fileName)) return true;
+  if (ORNAMENT_NAME.test(name) && !hasAlt) return true;
+  if (size.known && size.width / Math.max(size.height, 1) >= 6 && size.height <= 250) return true;
   if (element.matches('svg') && !element.querySelector('text') && !lenient) {
     if (size.known && largest < 120) return true;
     if (!size.known && !SEMANTIC_NAME.test(name) && !figure) return true;
@@ -136,6 +150,18 @@ function embedNote(element, base) {
   const fragment = JSDOM.fragment(`<p class="embed-note"><span class="embed-kind">${htmlText(kind)}</span>${title ? `: ${htmlText(title)}` : ''} <span class="embed-url">${htmlText(url)}</span></p>`);
   return element.ownerDocument.importNode(fragment.firstChild, true);
 }
+/** <object>/<embed> that point at an image are just images with extra steps. */
+function promoteImageObjects(root, base) {
+  for (const element of [...root.querySelectorAll('object[type^="image/" i], embed[type^="image/" i]')]) {
+    const source = safeUrl(element.getAttribute('data') || element.getAttribute('src') || '', base);
+    if (!source) { element.remove(); continue; }
+    const img = element.ownerDocument.createElement('img');
+    img.setAttribute('src', source);
+    img.setAttribute('alt', element.getAttribute('aria-label') || element.getAttribute('title') || '');
+    for (const name of ['width', 'height', 'data-printer-box', 'data-printer-asset', 'class']) if (element.getAttribute(name)) img.setAttribute(name, element.getAttribute(name));
+    element.replaceWith(img);
+  }
+}
 /** Paper cannot play media. Keep a poster frame when one exists and always keep the address. */
 function replaceEmbeds(root, base) {
   for (const element of [...root.querySelectorAll('iframe, embed, object, video, audio')]) {
@@ -160,28 +186,94 @@ function isChromeElement(element) {
   if (CHROME_TOKENS.test(identity) || CHROME_FRAGMENTS.test(identity)) return true;
   if (element.matches?.('a[href^="#"]') && /^skip to/i.test(element.textContent.trim())) return true;
   if (/^(navigation|contentinfo|dialog)$/.test(element.getAttribute?.('role') || '')) return true;
-  return /^(H2|H3|H4)$/.test(element.tagName) && CHROME_HEADING.test(element.textContent.trim());
+  return /^(H2|H3|H4)$/.test(element.tagName) && (CHROME_HEADING.test(element.textContent.trim()) || RECOMMENDATION_HEADING.test(element.textContent.trim()));
 }
 
+/**
+ * A chrome heading ("Related content", "Subscribe") marks a block to remove,
+ * but only the block it actually introduces. Walk up while the ancestor holds
+ * no substantial prose before the heading, so an article body that merely
+ * contains a "Recommended reading" section never gets deleted with it.
+ */
+function chromeBlockFor(heading) {
+  let block = heading;
+  let parent = heading.parentElement;
+  while (parent && !parent.matches('body, main, article, [role="main"]')) {
+    const before = [...parent.childNodes].slice(0, [...parent.childNodes].indexOf(block));
+    const priorText = before.map((node) => node.textContent || '').join(' ').replace(/\s+/g, ' ').trim().length;
+    if (priorText > 200) break;
+    block = parent;
+    parent = block.parentElement;
+    if (block.matches('section, aside')) break;
+  }
+  if (block === heading) {
+    // Remove the heading plus the siblings that follow it up to the next heading.
+    const following = [];
+    for (let node = heading.nextSibling; node && !(node.nodeType === 1 && /^H[1-6]$/.test(node.tagName)); node = node.nextSibling) following.push(node);
+    for (const node of following) node.remove();
+  }
+  return block;
+}
 function removeChrome(root) {
   for (const element of [...root.querySelectorAll('*')]) {
     if (!element.isConnected || !isChromeElement(element)) continue;
     if (element.matches('header') && element.closest('article')) continue;
-    const container = element.matches('h2, h3, h4') ? element.closest('section, aside, div') : element;
-    (container || element).remove();
+    (element.matches('h2, h3, h4') ? chromeBlockFor(element) : element).remove();
   }
   for (const header of root.querySelectorAll('article header')) {
     for (const ui of header.querySelectorAll('time, .byline, [rel="author"], [class*="avatar" i], [class*="share" i], [class*="social" i], [class*="reaction" i]')) ui.remove();
+    // Journal front matter: submission history, volume/issue/e-locator, DOI lines.
+    for (const line of [...header.querySelectorAll('p, li, span, div')]) {
+      if (!line.isConnected || line.querySelector('h1, h2, h3, p, ul, ol')) continue;
+      const text = line.textContent.replace(/\s+/g, ' ').trim();
+      if (!text) continue;
+      if (text.length <= 220 && (/\b(?:received|accepted|contributed by|edited by|reviewed by|published(?: online)?|first published|doi|e-?locator|open access|copyright|©|licen[cs]e)\b/i.test(text) || /^\d{1,3}\s*\(\d{1,3}\)\s*\S*$/.test(text) || /^(?:[A-Z][a-z]+ \d{1,2}, \d{4}|\d{1,2} [A-Z][a-z]+ \d{4}|\d{4}-\d{2}-\d{2})$/.test(text))) line.remove();
+    }
+    if (!header.querySelector('h1, h2, img, figure') && header.textContent.trim().split(/\s+/).length < 30) header.remove();
   }
 }
 
-function safeUrl(value, base) {
+const DATA_IMAGE = /^data:image\/(?:png|jpe?g|gif|webp|avif|svg\+xml);base64,[a-z0-9+/=\s]+$/i;
+function safeUrl(value, base, { allowDataImage = false } = {}) {
   const raw = String(value).trim();
   if (!raw || raw.startsWith('#')) return raw;
+  if (allowDataImage && DATA_IMAGE.test(raw)) return raw.replace(/\s+/g, '');
   if (/^(?:\.\/)?assets\//i.test(raw)) return raw.startsWith('./') ? raw : `./${raw}`;
   try { const parsed = new URL(raw, base); return ['http:','https:','mailto:','tel:'].includes(parsed.protocol) ? parsed.href : null; } catch { return null; }
 }
 function meta(document, selectors) { for (const selector of selectors) { const value = document.querySelector(selector)?.getAttribute('content')?.trim(); if (value) return value; } return null; }
+const NOT_A_NAME = /^(?:authors?|affiliations?|by|published|contributors?|staff|admin|editor|editors|team|unknown)$|not published|no doi|^\d|^[^\p{L}]*$|et al\.? \(\d{4}\)|\(\d{4}\)$/iu;
+const TRAILING_DATE = /\s*(?:[,·|–-]\s*)?(?:(?:Mon|Tues?|Wed(?:nes)?|Thu(?:rs)?|Fri|Sat(?:ur)?|Sun)day,?\s*)?(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s+\d{1,2},?\s+\d{4}.*$|\s*(?:[,·|–-]\s*)?\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{4}.*$|\s*(?:[,·|–-]\s*)?\d{4}-\d{2}-\d{2}.*$/i;
+function cleanName(value) {
+  const text = String(value ?? '').replace(/\s+/g, ' ').replace(/^\s*by\s+/i, '').replace(TRAILING_DATE, '').replace(/[,;]\s*$/, '').trim();
+  return text && text.length <= 120 && !NOT_A_NAME.test(text) ? text : null;
+}
+function joinNames(names) {
+  const unique = [...new Set(names.map(cleanName).filter(Boolean))];
+  if (!unique.length) return null;
+  return unique.length > 4 ? `${unique.slice(0, 3).join(', ')} et al.` : unique.join(', ');
+}
+/** Scholarly pages describe authors and dates in citation_* / dc.* metadata. */
+function citationMetadata(document) {
+  const contents = (names) => names.flatMap((name) => [...document.querySelectorAll(`meta[name="${name}" i]`)].map((m) => m.getAttribute('content')?.trim()).filter(Boolean));
+  const authors = joinNames(contents(['citation_author', 'dc.creator', 'dc.contributor', 'parsely-author', 'sailthru.author', 'article:author_name']));
+  const published = contents(['citation_publication_date', 'citation_date', 'citation_online_date', 'dc.date', 'dc.date.issued', 'parsely-pub-date', 'sailthru.date', 'article.published', 'publish-date', 'publication_date'])[0] || null;
+  return { authors, published };
+}
+/** Byline conventions that Readability does not know about (LaTeXML, Distill, common CMSes). */
+function markupAuthors(document) {
+  const groups = ['.ltx_authors .ltx_personname, .ltx_personname', 'd-byline .authors .author .name, d-byline .authors .author a', '.section-authors', '[itemprop="author"] [itemprop="name"], [itemprop="author"]', 'a[rel="author"]', '.author-name, .c-article-author-list__item, .byline__name, .author__name'];
+  for (const selector of groups) {
+    const nodes = [...document.querySelectorAll(selector)].filter((node) => !node.closest('[class*="related" i], [class*="recommend" i], [class*="comment" i], li article'));
+    const joined = joinNames(nodes.map((node) => node.textContent.replace(/;\s*edited by.*$/i, '').replace(/\s*\(.*?\)\s*/g, ' ').trim()));
+    if (joined) return joined;
+  }
+  return null;
+}
+function arxivDate(sourceUrl) {
+  const match = /arxiv\.org\/(?:abs|html|pdf)\/(\d{2})(\d{2})\./i.exec(sourceUrl);
+  return match ? `20${match[1]}-${match[2]}` : null;
+}
 function normalizeSrcset(value, base) {
   return parseSrcset(value).map(({ url, descriptor }) => { const normalized = safeUrl(url, base); return normalized ? `${normalized}${descriptor ? ` ${descriptor}` : ''}` : null; }).filter(Boolean).join(', ');
 }
@@ -200,7 +292,7 @@ function sanitize(root, base) {
       const name = attr.name.toLowerCase();
       if (!(GLOBAL.has(name) || ATTRS[tag]?.has(name) || SAFE_DATA_ATTRS.has(name)) || name.startsWith('on') || (name.startsWith('data-') && !SAFE_DATA_ATTRS.has(name)) || name === 'style' || name === 'srcdoc') { child.removeAttribute(attr.name); continue; }
       if (name === 'srcset') { const normalized = normalizeSrcset(attr.value, base); if (normalized) child.setAttribute(name, normalized); else child.removeAttribute(name); }
-      else if (URL_ATTRS.has(name)) { const normalized = safeUrl(attr.value, base); if (normalized) child.setAttribute(name, normalized); else child.removeAttribute(name); }
+      else if (URL_ATTRS.has(name)) { const normalized = safeUrl(attr.value, base, { allowDataImage: (tag === 'img' || tag === 'image') && (name === 'src' || name === 'href' || name === 'xlink:href') }); if (normalized) child.setAttribute(name, normalized); else child.removeAttribute(name); }
     }
     sanitize(child, base);
   }
@@ -227,7 +319,7 @@ function pruneForReadability(document) {
     if (!element.closest('article') || element.matches('dialog, [role="dialog"], [class*="modal" i], [class*="overlay" i], [class*="subscribe" i], [class*="substack" i]')) element.remove();
   }
   for (const heading of document.querySelectorAll('h2, h3, h4')) {
-    if (/other posts of interest|recommended|recommendations|you may also like/i.test(heading.textContent)) (heading.closest('section, aside, div') || heading).remove();
+    if (RECOMMENDATION_HEADING.test(heading.textContent.trim())) chromeBlockFor(heading).remove();
   }
 }
 function normalizedText(element) {
@@ -270,6 +362,13 @@ function findVisualAnchor(candidate, sourceBlocks, textIndex, contentRoot) {
   }
   return null;
 }
+/** Like closest(), but stops at (and excludes) a scope element. */
+function withinScopeMatches(element, scope, selector) {
+  for (let current = element; current && current !== scope; current = current.parentElement) {
+    if (current.matches(selector)) return current;
+  }
+  return null;
+}
 function mergeVisuals(contentRoot, sourceDocument, sourceUrl) {
   const visualRoot = sourceDocument.querySelector('main') || sourceDocument.querySelector('article') || sourceDocument.body;
   if (!visualRoot) return;
@@ -293,8 +392,11 @@ function mergeVisuals(contentRoot, sourceDocument, sourceUrl) {
     if (candidate.closest('header') && !candidate.closest('article')) continue;
     const candidateArticle = candidate.closest('article');
     if (proseArticle && candidateArticle && candidateArticle !== proseArticle) continue;
-    if (candidate.closest('[class*="share" i], [class*="social" i], [class*="comment" i], [class*="recommend" i], [class*="related" i], [class*="subscribe" i], [class*="avatar" i], [class*="byline" i], [class*="profile" i], [class*="author" i]')) continue;
-    if (candidate.closest('[class*="featured" i], [class*="teaser" i], [class*="promo" i], [class*="widget" i], [class*="sidebar" i], [class*="cta" i], [class*="banner" i], [class*="carousel" i], [class*="slider" i], [class*="popular" i], [class*="trending" i], [class*="tab-pane" i], [id*="related" i], [id*="recommend" i]')) continue;
+    // Furniture classes are only meaningful below the article root; page-level
+    // layout wrappers ("with-sidebar", "content") are shared by everything.
+    const scope = candidate.closest('article, main, [role="main"]') || visualRoot;
+    if (withinScopeMatches(candidate, scope, '[class*="share" i], [class*="social" i], [class*="comment" i], [class*="recommend" i], [class*="related" i], [class*="subscribe" i], [class*="avatar" i], [class*="byline" i], [class*="profile" i], [class*="author" i]')) continue;
+    if (withinScopeMatches(candidate, scope, '[class*="featured" i], [class*="teaser" i], [class*="promo" i], [class*="widget" i], [class*="sidebar" i], [class*="cta" i], [class*="banner" i], [class*="carousel" i], [class*="slider" i], [class*="popular" i], [class*="trending" i], [class*="tab-pane" i], [id*="related" i], [id*="recommend" i]')) continue;
     const linked = candidate.closest('a[href]');
     if (linked) {
       try {
@@ -340,17 +442,70 @@ function htmlText(value) {
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   }[character]));
 }
-function mergeMissingProse(contentRoot, sourceDocument) {
-  const sourceArticle = sourceDocument.querySelector('main > article, article:not(.comment), main');
+/**
+ * Readability keeps the densest block and can drop sibling sections such as
+ * an abstract, a summary box, or a short closing section. Recover any
+ * heading-led section from the source article whose prose is missing, and
+ * put it back where it belongs in reading order.
+ */
+function sectionBlock(heading) {
+  const section = heading.closest('section');
+  if (section && section.querySelectorAll('h2, h3').length <= 1) return section;
+  const nodes = [heading];
+  for (let node = heading.nextSibling; node && !(node.nodeType === 1 && /^H[1-2]$/.test(node.tagName)); node = node.nextSibling) nodes.push(node);
+  return nodes;
+}
+function blockText(block) {
+  return (Array.isArray(block) ? block.map((node) => node.textContent || '').join(' ') : block.textContent).replace(/\s+/g, ' ').trim();
+}
+function restoreMissingSections(contentRoot, sourceDocument, sourceUrl) {
+  const sourceArticle = sourceDocument.querySelector('main article, article:not(.comment), main, [role="main"]');
   if (!sourceArticle) return;
   const existingText = contentRoot.textContent.replace(/\s+/g, ' ');
-  for (const node of sourceArticle.querySelectorAll(':scope > h2, :scope > h3, :scope > p, :scope > section > h2, :scope > section > h3, :scope > section > p')) {
-    if (node.closest('[class*="EventTimeline"]')) continue;
-    const text = node.textContent.replace(/\s+/g, ' ').trim();
-    if (!text || existingText.includes(text)) continue;
-    contentRoot.appendChild(contentRoot.ownerDocument.importNode(node, true));
+  const contentHeadings = [...contentRoot.querySelectorAll('h1, h2, h3')];
+  const findInContent = (text) => contentHeadings.find((heading) => normalizedText(heading) === text);
+  const sourceHeadings = [...sourceArticle.querySelectorAll('h2')].filter((heading) => !heading.closest('nav, aside, footer, figure, table, [hidden], [aria-hidden="true"]'));
+  for (const [index, heading] of sourceHeadings.entries()) {
+    const title = normalizedText(heading);
+    if (!title || findInContent(title)) continue;
+    if (CHROME_HEADING.test(title) || RECOMMENDATION_HEADING.test(title) || BACK_MATTER_SKIP.test(title)) continue;
+    if (withinScopeMatches(heading, sourceArticle, '[class*="share" i], [class*="social" i], [class*="comment" i], [class*="recommend" i], [class*="related" i], [class*="subscribe" i], [class*="newsletter-signup" i], [class*="promo" i], [class*="teaser" i], [class*="sidebar" i], [class*="access" i], [class*="paywall" i]')) continue;
+    const block = sectionBlock(heading);
+    const nodes = Array.isArray(block) ? block : [block];
+    const elements = nodes.filter((node) => node.nodeType === 1);
+    const text = blockText(block);
+    const words = text.split(' ').length;
+    if (words < 60) continue;
+    // Card lists and link farms are mostly anchor text with little paragraph prose.
+    const linkText = elements.flatMap((element) => [...element.querySelectorAll('a')]).map((a) => a.textContent.replace(/\s+/g, ' ').trim()).join(' ').length;
+    const proseWords = elements.flatMap((element) => [...element.querySelectorAll('p'), ...(element.matches('p') ? [element] : [])]).filter((par) => !par.closest('a')).map((par) => par.textContent.replace(/\s+/g, ' ').trim()).join(' ').split(' ').filter(Boolean).length;
+    if (linkText / Math.max(text.length, 1) > 0.4 || proseWords < 50) continue;
+    if (elements.some((element) => element.querySelectorAll('article, li article, [class*="card" i]').length >= 2)) continue;
+    const sample = text.slice(title.length, title.length + 160).trim();
+    if (sample && existingText.includes(sample)) continue;
+    const clones = nodes.map((node) => contentRoot.ownerDocument.importNode(node, true));
+    // Anchor on the nearest later heading that made it into the article; else the nearest earlier one.
+    let inserted = false;
+    for (let cursor = index + 1; cursor < sourceHeadings.length && !inserted; cursor += 1) {
+      const anchor = findInContent(normalizedText(sourceHeadings[cursor]));
+      if (anchor) { const target = blockAnchor(anchor, contentRoot); for (const clone of clones) target.parentNode.insertBefore(clone, target); inserted = true; }
+    }
+    for (let cursor = index - 1; cursor >= 0 && !inserted; cursor -= 1) {
+      const anchor = findInContent(normalizedText(sourceHeadings[cursor]));
+      if (anchor) {
+        const following = sectionBlock(anchor);
+        const last = Array.isArray(following) ? following.at(-1) : following;
+        const target = blockAnchor(last, contentRoot);
+        let reference = target.nextSibling;
+        for (const clone of clones) { target.parentNode.insertBefore(clone, reference); }
+        inserted = true;
+      }
+    }
+    if (!inserted) { const firstBlock = contentRoot.querySelector('p, h2, h3, figure'); const target = firstBlock ? blockAnchor(firstBlock, contentRoot) : null; for (const clone of clones) (target ? target.parentNode.insertBefore(clone, target) : contentRoot.appendChild(clone)); }
+    contentHeadings.push(...clones.flatMap((clone) => clone.nodeType === 1 ? [clone, ...clone.querySelectorAll('h1, h2, h3')].filter((el) => /^H[1-3]$/.test(el.tagName)) : []));
   }
 }
+const BACK_MATTER_SKIP = /^(?:references|bibliography|rights and permissions|about this article|author information|ethics declarations|peer review|additional information|supplementary information|change history|article history|reviewer information)/i;
 function restoreCompleteSource(contentRoot, sourceDocument) {
   const sourceRoot = sourceDocument.querySelector('[data-toc-content="true"]');
   if (!sourceRoot) return;
@@ -492,15 +647,48 @@ function reconstructTimeline(sourceDocument, contentRoot, sourceUrl) {
   if (sourceUrl) { sanitize(timeline, sourceUrl); localizeImages(timeline); }
 }
 
+/**
+ * Uncaptioned, alt-less images after the last paragraph are closing
+ * ornaments (spot illustrations, end marks), not content.
+ */
+function removeTrailingOrnaments(root) {
+  const blocks = [...root.querySelectorAll('p, li, blockquote, pre, h2, h3, h4, table, figcaption')].filter((block) => block.textContent.trim().length > 20);
+  const lastProse = blocks.at(-1);
+  if (!lastProse) return;
+  for (const visual of [...root.querySelectorAll('img')]) {
+    if (!visual.isConnected || visual.closest('.reconstructed-timeline')) continue;
+    if (!(lastProse.compareDocumentPosition(visual) & 4)) continue; // visual is not after the last prose block
+    const figure = visual.closest('figure');
+    if (figure?.querySelector('figcaption')?.textContent?.trim()) continue;
+    if (visual.getAttribute('alt')?.trim()) continue;
+    (visual.closest('picture') || visual).remove();
+    if (figure && !figure.querySelector('img, svg, table, pre')) figure.remove();
+  }
+}
+
+/** Heading-led blocks that are mostly links and contain no prose are navigation, not reading. */
+function removeLinkFarms(root) {
+  const total = root.textContent.replace(/\s+/g, ' ').trim().length || 1;
+  for (const heading of [...root.querySelectorAll('h2, h3')]) {
+    if (!heading.isConnected || heading.closest('.reconstructed-timeline')) continue;
+    const block = sectionBlock(heading);
+    const nodes = (Array.isArray(block) ? block : [block]).filter((node) => node.nodeType === 1);
+    const text = blockText(block);
+    if (!text || text.length > total * 0.5) continue;
+    const linkText = nodes.flatMap((node) => [...node.querySelectorAll('a')]).map((a) => a.textContent.replace(/\s+/g, ' ').trim()).join(' ').length;
+    const prose = nodes.flatMap((node) => [...node.querySelectorAll('p'), ...(node.matches('p') ? [node] : [])]).some((par) => !par.closest('a') && par.textContent.trim().split(/\s+/).length >= 20);
+    if (linkText / text.length > 0.6 && !prose) for (const node of (Array.isArray(block) ? block : [block])) node.remove();
+  }
+}
+
 function removeRecommendationContent(root) {
   const elements = [...root.querySelectorAll('*')];
   const headings = elements.filter((element) => /^(H2|H3|H4)$/.test(element.tagName));
-  const recommendation = /other posts of interest|recommended|recommendations|more from|you may also like|explore more|more topics|most popular|most read|trending|related (?:stories|articles|posts|content|reading)|read (?:more|next)|up next|latest (?:stories|articles|from)|popular (?:stories|articles|posts)|don(?:'|’)t miss|further reading/i;
+  const recommendation = RECOMMENDATION_HEADING;
   for (const heading of headings) {
-    if (!recommendation.test(heading.textContent)) continue;
-    const container = heading.closest('section, aside, [class*="recommend" i], [class*="related" i]');
-    if (container && container !== root) container.remove();
-    else heading.remove();
+    if (!recommendation.test(heading.textContent.trim())) continue;
+    const block = chromeBlockFor(heading);
+    if (block !== root) block.remove(); else heading.remove();
   }
   for (const visual of [...root.querySelectorAll('figure, img')]) {
     const index = elements.indexOf(visual);
@@ -511,6 +699,24 @@ function removeRecommendationContent(root) {
 }
 
 
+/** "Some title - Nature" / "Some title | WIRED" -> "Some title". */
+export function stripSiteSuffix(title, siteName, sourceUrl) {
+  const text = String(title ?? '').replace(/\s+/g, ' ').trim();
+  const brands = new Set();
+  if (siteName) brands.add(siteName.trim().toLowerCase());
+  try { const host = new URL(sourceUrl).hostname.replace(/^www\./, ''); brands.add(host.toLowerCase()); brands.add(host.split('.')[0].toLowerCase()); } catch {}
+  const match = /^(.{8,}?)\s+[-–—|:·]\s+([^-–—|]{2,40})$/.exec(text);
+  if (!match) return text;
+  const suffix = match[2].trim().toLowerCase();
+  const compact = (value) => value.replace(/[\s.\-_]+/g, '');
+  const isBrand = [...brands].some((brand) => {
+    if (!brand) return false;
+    const a = compact(suffix);
+    const b = compact(brand);
+    return suffix === brand || a === b || (b.length >= 5 && a.includes(b)) || (a.length >= 5 && b.includes(a));
+  });
+  return isBrand ? match[1].trim() : text;
+}
 function mastheadFallback(document, articleTitle) {
   const candidates = [...document.querySelectorAll('h1')].filter((heading) => !heading.closest('article'));
   if (document.querySelectorAll('h1').length < 2 || !candidates.length) return null;
@@ -535,6 +741,7 @@ function cleanXArticle(contentRoot, info) {
 const PAYWALL_MARKERS = [
   [/property=["']article:content_tier["'][^>]*content=["'](metered|locked|premium|paid|subscription)["']|content=["'](metered|locked|premium|paid|subscription)["'][^>]*property=["']article:content_tier["']/i, 'content-tier'],
   [/["']isAccessibleForFree["']\s*:\s*(?:false|["']false["'])/i, 'schema-not-free'],
+  [/<meta[^>]+name=["']access["'][^>]+content=["']no["']|<meta[^>]+content=["']no["'][^>]+name=["']access["']/i, 'access-no'],
   [/hasPaywallAccess["']?\s*:\s*false|trackPaywallShown|paywall(?:_|-)?shown/i, 'paywall-state'],
   [/data-zephr|zephr-sdk|tinypass\.com|tp\.push\(|piano\.io|data-piano|poool\.|laterpay|evolok|pelcro|leaky-paywall|data-paywall|class=["'][^"']*(?:paywall|regwall|meter-wall|metered-wall|InContentBarrier)/i, 'paywall-vendor'],
 ];
@@ -556,35 +763,44 @@ export function extractArticle(html, url, retrievedDate = null) {
   const visibleTextDate = [...document.querySelectorAll('h1')].map((heading) => heading.parentElement?.querySelector('p')?.textContent?.trim()).find((text) => /\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\b/.test(text || '')) || null;
   const visiblePublished = visibleTextDate || document.querySelector('time[datetime], [itemprop="datePublished"]')?.getAttribute('datetime') || document.querySelector('time')?.textContent?.trim() || null;
   const canonical = document.querySelector('link[rel="canonical"]')?.href || sourceUrl;
+  promoteImageObjects(document, sourceUrl);
   const readabilityDocument = document.cloneNode(true);
   pruneForReadability(readabilityDocument);
   const article = new Readability(readabilityDocument).parse();
   const articleDom = new JSDOM(`<body>${article?.content ?? document.body?.innerHTML ?? ''}</body>`, { url: sourceUrl });
   const contentRoot = articleDom.window.document.body;
   restoreCompleteSource(contentRoot, readabilityDocument);
+  restoreMissingSections(contentRoot, readabilityDocument, sourceUrl);
   mergeVisuals(contentRoot, document, sourceUrl);
   removeChrome(contentRoot);
   sanitize(contentRoot, sourceUrl);
+  promoteImageObjects(contentRoot, sourceUrl);
   localizeImages(contentRoot);
   removeDecorativeVisuals(contentRoot);
   replaceEmbeds(contentRoot, sourceUrl);
   removeEmptyVisuals(contentRoot);
+  removeRecommendationContent(contentRoot);
+  removeLinkFarms(contentRoot);
+  removeTrailingOrnaments(contentRoot);
   reconstructTimeline(document, contentRoot, sourceUrl);
   const xInfo = xSourceInfo(document, sourceUrl);
   cleanXArticle(contentRoot, xInfo);
   normalizeTextBoundaries(contentRoot);
   stripPrinterAttributes(contentRoot);
   const rawArticleByline = document.querySelector('main > article header [rel="author"], main > article header .byline, article:not(.comment) > header [rel="author"], article:not(.comment) > header .byline, main > article [rel="author"], main > article .byline')?.textContent?.replace(/^\s*by\s+/i, '')?.trim() || null;
-  const articleByline = rawArticleByline && !/^(first|last) message board entry$/i.test(rawArticleByline) ? rawArticleByline : null;
+  const articleByline = rawArticleByline && !/^(first|last) message board entry$/i.test(rawArticleByline) ? cleanName(rawArticleByline) : null;
+  const citation = citationMetadata(document);
+  const authorsFromMarkup = markupAuthors(document);
   const authorMeta = meta(document, ['meta[property="article:author"]','meta[name="author"]','meta[name="byline"]']);
   const articleHeading = document.querySelector('main > article h1, article:not(.comment) h1, main h1')?.textContent?.trim() || null;
   const fallbackAuthor = authorMeta || meta(document, ['meta[property="og:site_name"]']) || (/openai\.com/i.test(sourceUrl) ? 'OpenAI' : null);
-  const title = xInfo?.title || ogTitle || articleHeading || article?.title || structured.title || document.title;
+  const siteName = meta(document, ['meta[property="og:site_name"]', 'meta[name="application-name"]']);
+  const title = stripSiteSuffix(xInfo?.title || ogTitle || articleHeading || article?.title || structured.title || document.title, siteName, sourceUrl);
   const mastheadAuthor = mastheadFallback(document, title);
   const metadata = normalizeMetadata({
     title,
-    author: xInfo?.handle || articleByline || authorMeta || structured.author || (article?.byline && !/comment|first message board entry|last message board entry/i.test(article.byline) ? article.byline : fallbackAuthor || mastheadAuthor),
-    published: published || structured.published || article?.publishedTime || visiblePublished,
+    author: xInfo?.handle || citation.authors || articleByline || cleanName(authorMeta) || cleanName(structured.author) || authorsFromMarkup || (article?.byline && !/comment|first message board entry|last message board entry/i.test(article.byline) ? cleanName(article.byline) : null) || fallbackAuthor || mastheadAuthor,
+    published: published || citation.published || structured.published || article?.publishedTime || visiblePublished || arxivDate(sourceUrl),
     sourceUrl: canonical,
     retrieved: retrievedDate,
     text: contentRoot.textContent,

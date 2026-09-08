@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { forwardingTarget, isShareLink, resolveArticleUrl } from '../src/resolve.js';
-import { assessArticle } from '../src/cli.js';
+import { forwardingTarget, isShareLink, resolveArticleUrl, fullTextUrl } from '../src/resolve.js';
+import { assessArticle, bodyWordCount } from '../src/cli.js';
 
 const APPLE_NEWS = `<!DOCTYPE html><html><head><title>Trump Meant It Literally — The Atlantic</title>
 <script>
@@ -70,4 +70,25 @@ test('assessArticle refuses interstitials, paywall previews, and stubs', () => {
   assert.equal(assessArticle({ metadata: meta, content: `<p>${'Full prose. '.repeat(1200)}</p>`, access: { gated: true, tier: 'metered', signals: ['content-tier'] } }), null, 'gated but fully served is printable');
   // A long article that merely mentions subscriptions is not a paywall.
   assert.equal(assessArticle({ metadata: meta, content: `<p>${'Long essay prose. '.repeat(600)}</p><p>Already a subscriber? Log in.</p>` }), null);
+});
+
+test('arXiv abstract pages resolve to the HTML full text when it exists', async () => {
+  const big = '<html>' + 'x'.repeat(30000) + '</html>';
+  const okFetch = async (url) => ({ ok: url === 'https://arxiv.org/html/2609.05036', url, headers: { get: () => 'text/html' }, async text() { return url === 'https://arxiv.org/html/2609.05036' ? big : ''; } });
+  assert.equal(await fullTextUrl('https://arxiv.org/abs/2609.05036', { fetchImpl: okFetch }), 'https://arxiv.org/html/2609.05036');
+  assert.equal(await fullTextUrl('https://arxiv.org/pdf/2609.05036v2', { fetchImpl: okFetch }), 'https://arxiv.org/pdf/2609.05036v2', 'no HTML for that version -> unchanged');
+  const missing = async (url) => ({ ok: true, url, headers: { get: () => 'text/html' }, async text() { return '<html>HTML is not available for this paper</html>'; } });
+  assert.equal(await fullTextUrl('https://arxiv.org/abs/2609.05036', { fetchImpl: missing }), 'https://arxiv.org/abs/2609.05036');
+  const result = await resolveArticleUrl('https://arxiv.org/abs/2609.05036', { fetchImpl: okFetch });
+  assert.equal(result.url, 'https://arxiv.org/html/2609.05036');
+});
+
+test('a reference list cannot disguise a paywalled abstract as a full article', () => {
+  const refs = Array.from({ length: 60 }, (_, i) => `<li>Author ${i}, Another. A long reference title with many words in it. Journal of Things ${2000 + i}.</li>`).join('');
+  const content = `<h2>Abstract</h2><p>${'Abstract sentence words here. '.repeat(40)}</p><h2>Access options</h2><p>Access through your institution. Buy this article.</p><h2>Data availability</h2><p>Data are available.</p><h2>References</h2><ol>${refs}</ol>`;
+  assert.ok(bodyWordCount(content) < 300, `body words ${bodyWordCount(content)}`);
+  const verdict = assessArticle({ metadata: { title: 'Paper' }, content, access: { gated: true, tier: null, signals: ['access-no', 'schema-not-free'] } });
+  assert.equal(verdict?.reason, 'paywall');
+  const full = `<h2>Abstract</h2><p>${'Abstract words. '.repeat(40)}</p><h2>Main</h2><p>${'Body prose words. '.repeat(900)}</p><h2>References</h2><ol>${refs}</ol>`;
+  assert.equal(assessArticle({ metadata: { title: 'Paper' }, content: full, access: { gated: true, tier: null, signals: ['access-no'] } }), null);
 });

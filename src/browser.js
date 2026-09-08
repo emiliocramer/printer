@@ -177,7 +177,7 @@ export async function settleLazyMedia(page, { maxScrollSteps = 80, stepDelayMs =
 export async function annotateVisuals(page) {
   await page.evaluate(() => {
     const box = (element) => { const rect = element.getBoundingClientRect(); return `${Math.round(rect.width)}x${Math.round(rect.height)}`; };
-    for (const element of document.querySelectorAll('img, svg, picture, figure, video, iframe, canvas')) element.setAttribute('data-printer-box', box(element));
+    for (const element of document.querySelectorAll('img, svg, picture, figure, video, iframe, canvas, object, embed')) element.setAttribute('data-printer-box', box(element));
     for (const img of document.images) {
       img.setAttribute('data-printer-natural', `${img.naturalWidth}x${img.naturalHeight}`);
       if (img.currentSrc && !/^data:/i.test(img.currentSrc)) img.setAttribute('data-printer-src', img.currentSrc);
@@ -210,8 +210,8 @@ async function fetchAsset(page, assetUrl) {
 
 async function localizeAssets(page, html, assetsDir) {
   await mkdir(assetsDir, { recursive: true });
-  const urls = await page.evaluate(() => [...document.querySelectorAll('img, source[src], svg image[href], svg image')].map((node) => {
-    const value = node.getAttribute('data-printer-src') || node.getAttribute('href') || node.getAttribute('xlink:href') || node.getAttribute('src') || node.currentSrc || node.src || node.href?.baseVal;
+  const urls = await page.evaluate(() => [...document.querySelectorAll('img, source[src], svg image[href], svg image, object[type^="image/"][data], embed[type^="image/"][src]')].map((node) => {
+    const value = node.getAttribute('data-printer-src') || node.getAttribute('href') || node.getAttribute('xlink:href') || node.getAttribute('src') || node.getAttribute('data') || node.currentSrc || node.src || node.href?.baseVal;
     if (!value || /^data:/i.test(value)) return null;
     try { return new URL(value, document.baseURI).href; } catch { return value; }
   }).filter(Boolean));
@@ -236,14 +236,15 @@ async function localizeAssets(page, html, assetsDir) {
   }
   if (!Object.keys(replacements).length) return html;
   await page.evaluate((mapping) => {
-    for (const node of document.querySelectorAll('img, source[src], svg image[href], svg image')) {
-      const raw = node.getAttribute('data-printer-src') || node.getAttribute('href') || node.getAttribute('xlink:href') || node.getAttribute('src') || node.currentSrc || node.src || node.href?.baseVal;
+    for (const node of document.querySelectorAll('img, source[src], svg image[href], svg image, object[type^="image/"][data], embed[type^="image/"][src]')) {
+      const raw = node.getAttribute('data-printer-src') || node.getAttribute('href') || node.getAttribute('xlink:href') || node.getAttribute('src') || node.getAttribute('data') || node.currentSrc || node.src || node.href?.baseVal;
       let value;
       try { value = new URL(raw, document.baseURI).href; } catch { value = raw; }
       const filename = mapping[value];
       if (!filename) continue;
       if (node.tagName.toLowerCase() === 'image') node.setAttribute('href', `./assets/${filename}`);
       else if (node.tagName.toLowerCase() === 'source') node.setAttribute('src', `./assets/${filename}`);
+      else if (/^(object|embed)$/i.test(node.tagName)) node.setAttribute('data-printer-asset', filename);
       else {
         // Keep the remote URL as src so readability heuristics still see a real
         // image; extraction swaps in the local copy from data-printer-asset.
@@ -288,20 +289,23 @@ export function startPreviewServer({ directory, port = 0 } = {}) {
 
 export async function populatePortraitPanels(page) {
   return page.evaluate(() => {
+    // Only graphics wide enough that a full-column rendering would make their
+    // labels unreadable are split; a 2:1 chart fits a portrait column fine.
+    const SPLIT_RATIO = 3;
     const candidates = [...document.querySelectorAll('figure')];
     for (const figure of candidates) {
       if (figure.dataset.figureTreatment) continue;
-      const source = figure.querySelector(':scope > img, :scope > svg');
+      const source = figure.querySelector(':scope > img, :scope > svg, :scope > picture > img');
       const hint = `${figure.className} ${figure.getAttribute('alt') || ''} ${figure.textContent || ''}`.toLowerCase();
       const semantic = /timeline|time line|chronology|chart|graph|diagram|architecture|roadmap|process|flow/.test(hint);
       const width = source?.naturalWidth || source?.viewBox?.baseVal?.width || source?.width?.baseVal?.value || source?.width || 0;
       const height = source?.naturalHeight || source?.viewBox?.baseVal?.height || source?.height?.baseVal?.value || source?.height || 0;
-      if (source && semantic && width > 0 && height > 0 && width / height >= 1.6) figure.dataset.figureTreatment = 'stacked-portrait-panels';
+      if (source && semantic && width > 0 && height > 0 && width / height >= SPLIT_RATIO) figure.dataset.figureTreatment = 'stacked-portrait-panels';
     }
     const figures = document.querySelectorAll('figure[data-figure-treatment="stacked-portrait-panels"]');
     for (const figure of figures) {
       if (figure.dataset.portraitPanelsPopulated === 'true') continue;
-      const source = figure.querySelector('.figure-panel[data-panel-role="source"] img, .figure-panel[data-panel-role="source"] svg, :scope > img, :scope > svg');
+      const source = figure.querySelector('.figure-panel[data-panel-role="source"] img, .figure-panel[data-panel-role="source"] svg, :scope > img, :scope > svg, :scope > picture > img');
       if (!source) continue;
 
       let width;
@@ -318,6 +322,8 @@ export async function populatePortraitPanels(page) {
 
       const count = width / height >= 2.4 ? 3 : 2;
       const sliceWidth = width / count;
+      // Every slice is scaled so it exactly fills the printable column.
+      const columnWidth = figure.getBoundingClientRect().width || figure.parentElement?.getBoundingClientRect().width || 624;
       const caption = figure.querySelector('figcaption')?.textContent?.trim() || 'Figure';
       let wrapper = figure.querySelector(':scope > .figure-panels');
       if (!wrapper) {
@@ -344,16 +350,21 @@ export async function populatePortraitPanels(page) {
 
         const visual = index === 0 ? source : source.cloneNode(true);
         visual.style.maxWidth = 'none';
+        visual.style.maxHeight = 'none';
         if (visual.tagName.toLowerCase() === 'svg' && visual.viewBox?.baseVal) {
           const viewBox = visual.viewBox.baseVal;
           visual.setAttribute('viewBox', `${viewBox.x + sliceWidth * index} ${viewBox.y} ${sliceWidth} ${viewBox.height}`);
-          visual.style.width = `${sliceWidth}px`;
+          visual.style.width = `${columnWidth}px`;
+          visual.style.height = 'auto';
         } else {
-          visual.style.width = `${width}px`;
-          visual.style.transform = `translateX(-${sliceWidth * index}px)`;
+          visual.style.width = `${columnWidth * count}px`;
+          visual.style.height = 'auto';
+          visual.style.transform = `translateX(-${columnWidth * index}px)`;
           visual.style.transformOrigin = 'top left';
         }
+        const picture = source.closest('picture');
         panel.appendChild(visual);
+        if (picture && index === 0) picture.remove();
         wrapper.appendChild(panel);
       }
       figure.dataset.panelCount = String(count);

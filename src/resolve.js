@@ -39,6 +39,28 @@ export function forwardingTarget(html, base) {
   return null;
 }
 
+/**
+ * Some hosts publish an abstract landing page and a separate full-text page.
+ * Map the landing page to the full text when the host is known to have one.
+ */
+export async function fullTextUrl(url, { fetchImpl = globalThis.fetch, timeoutMs = 10000 } = {}) {
+  let parsed;
+  try { parsed = new URL(url); } catch { return url; }
+  const arxiv = /^(?:www\.)?arxiv\.org$/i.test(parsed.hostname) && /^\/(?:abs|pdf)\/(\d{4}\.\d{4,5}(?:v\d+)?|[a-z-]+\/\d{7}(?:v\d+)?)/i.exec(parsed.pathname);
+  if (arxiv) {
+    const candidate = `https://arxiv.org/html/${arxiv[1]}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetchImpl(candidate, { method: 'GET', redirect: 'follow', signal: controller.signal, headers: { 'user-agent': BROWSER_UA, accept: 'text/html' } });
+      const body = response.ok ? await response.text() : '';
+      // arXiv serves a small "HTML not available" page for papers without a conversion.
+      if (response.ok && body.length > 20000 && !/html (?:is )?not available|conversion failed/i.test(body.slice(0, 5000))) return candidate;
+    } catch {} finally { clearTimeout(timer); }
+  }
+  return url;
+}
+
 export function isShareLink(url) {
   try { const parsed = new URL(url); return SHARE_HOSTS.test(parsed.hostname) || SHARE_HOSTS.test(`${parsed.hostname}${parsed.pathname}`); } catch { return false; }
 }
@@ -62,7 +84,10 @@ async function fetchInterstitial(url, fetchImpl, timeoutMs) {
 export async function resolveArticleUrl(input, { fetchImpl = globalThis.fetch, maxHops = 4, timeoutMs = 10000, always = false } = {}) {
   let current = String(input);
   const hops = [current];
-  if (!always && !isShareLink(current)) return { url: current, hops: [] };
+  if (!always && !isShareLink(current)) {
+    const full = await fullTextUrl(current, { fetchImpl, timeoutMs });
+    return full === current ? { url: current, hops: [] } : { url: full, hops: [current, full] };
+  }
   for (let hop = 0; hop < maxHops; hop += 1) {
     let page;
     try { page = await fetchInterstitial(current, fetchImpl, timeoutMs); } catch { break; }
@@ -75,5 +100,7 @@ export async function resolveArticleUrl(input, { fetchImpl = globalThis.fetch, m
     // Once we are on a publisher page the browser capture takes over.
     if (!isShareLink(current)) break;
   }
+  const full = await fullTextUrl(current, { fetchImpl, timeoutMs });
+  if (full !== current) { hops.push(full); current = full; }
   return { url: current, hops: hops.length > 1 ? hops : [] };
 }

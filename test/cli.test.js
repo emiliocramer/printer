@@ -153,7 +153,8 @@ test('waitForReadablePage waits for a challenge page to resolve', async () => {
 test('populatePortraitPanels clips a wide timeline into readable continuation panels', async () => {
   const dom = new JSDOM('<figure data-figure-treatment=\"stacked-portrait-panels\"><figcaption>Model timeline</figcaption><img class=\"timeline-chart\" src=\"timeline.png\"></figure>');
   const image = dom.window.document.querySelector('img');
-  Object.defineProperties(image, { naturalWidth: { value: 2400 }, naturalHeight: { value: 900 } });
+  Object.defineProperties(image, { naturalWidth: { value: 3000 }, naturalHeight: { value: 900 } });
+  dom.window.document.querySelector('figure').getBoundingClientRect = () => ({ width: 624 });
   const previousDocument = globalThis.document;
   globalThis.document = dom.window.document;
   try {
@@ -169,9 +170,21 @@ test('populatePortraitPanels clips a wide timeline into readable continuation pa
     const visual = panel.querySelector('img');
     assert.ok(visual);
     assert.equal(visual.style.maxWidth, 'none');
-    assert.match(visual.style.width, /px$/);
+    assert.equal(visual.style.width, '1872px', 'scaled so each slice fills the 624px column, never natural pixels');
     assert.equal(panel.style.overflow, 'hidden');
   }
+  assert.equal(panels[2].querySelector('img').style.transform, 'translateX(-1248px)');
+});
+
+test('populatePortraitPanels leaves moderately wide figures alone', async () => {
+  const dom = new JSDOM('<figure><figcaption>Graph of milestones</figcaption><img src="dag.png"></figure>');
+  const image = dom.window.document.querySelector('img');
+  Object.defineProperties(image, { naturalWidth: { value: 3840 }, naturalHeight: { value: 1843 } });
+  const previousDocument = globalThis.document;
+  globalThis.document = dom.window.document;
+  try { await populatePortraitPanels({ async evaluate(fn) { return fn(); } }); } finally { globalThis.document = previousDocument; }
+  assert.equal(dom.window.document.querySelector('.figure-panel'), null);
+  assert.equal(image.style.width, '');
 });
 
 test('validateUrl accepts only usable public HTTP(S) URLs', () => {
@@ -311,8 +324,15 @@ test('runPrint falls back to client capture after an access challenge', async ()
     async startPreview() { calls.push('serve'); return { url: 'http://127.0.0.1:40001/', async close() { calls.push('close'); } }; },
     async pdf(_url, outputPath) { calls.push('pdf'); const { writeFile } = await import('node:fs/promises'); await writeFile(outputPath, '%PDF-fake'); },
   };
-  await runPrint('https://example.com/challenged', { outputDir, browser, noPreview: true, minimumWords: 0 });
+  await runPrint('https://example.com/challenged', { outputDir, browser, noPreview: true, minimumWords: 0, interactive: true });
   assert.deepEqual(calls, ['headless', ['client', 'https://example.com/challenged'], 'serve', 'pdf', 'close']);
+});
+
+test('slugs keep arXiv identifiers and only strip real file extensions', () => {
+  assert.equal(slugForUrl('https://arxiv.org/html/2609.05009'), 'arxiv-org-html-2609-05009');
+  assert.equal(slugForUrl('https://arxiv.org/abs/2609.05009v2'), 'arxiv-org-abs-2609-05009v2');
+  assert.equal(slugForUrl('https://transformer-circuits.pub/2026/june-update/index.html'), 'transformer-circuits-pub-2026-june-update-index');
+  assert.equal(slugForUrl('https://www.pnas.org/doi/10.1073/pnas.2525600123'), 'www-pnas-org-doi-10-1073-pnas-2525600123');
 });
 
 test('parseArgs accepts --keep-source and rejects unknown options', async () => {

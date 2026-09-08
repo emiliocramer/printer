@@ -1,0 +1,12 @@
+import { captureRenderedPage } from './src/browser.js';
+import { JSDOM } from 'jsdom';
+import { Readability } from '@mozilla/readability';
+import { writeFileSync } from 'node:fs';
+const r = await captureRenderedPage('https://www.nature.com/articles/s41586-026-10818-8', {});
+writeFileSync('/tmp/nature2.html', r.html);
+const d = new JSDOM(r.html, { url: r.finalUrl }).window.document;
+const abs = d.querySelector('#Abs1-section, section[data-title="Abstract"]');
+console.log('abstract in source:', !!abs, abs?.textContent.replace(/\s+/g,' ').slice(0,100));
+let el=abs; const chain=[]; while(el&&chain.length<7){ chain.push(el.localName+(el.className?'.'+String(el.className).trim().split(/\s+/).slice(0,2).join('.'):'')+(el.id?'#'+el.id:'')); el=el.parentElement;} console.log(chain.join(' < '));
+const a = new Readability(d.cloneNode(true)).parse();
+console.log('plain readability has Abstract heading:', /Abstract/.test(a.content.slice(0,3000)), 'first 200:', a.textContent.slice(0,200));
